@@ -158,4 +158,41 @@ describe("PDF text parser", () => {
       },
     ]);
   });
+
+  it("keeps the class letter from the file when the PDF header only has the year", () => {
+    const students = parseStudentsFromText(
+      `
+      6º ano
+      1 Carlos Fabricio da Silva Lima Cursando
+      2 Maria Alice Silva Campos Cursando
+      `,
+      "BOLETIM 6C.pdf",
+    );
+
+    expect(students.map((student) => student.className)).toEqual(["6C", "6C"]);
+  });
+
+  it("does not update the class from grade and attendance values in bulletin rows", () => {
+    const students = parseStudentsFromText(
+      `
+      Curso: Ensino Fundamental - Anos Finais Turno: Matutino Série: 6º Ano Turma: 6º ANO C Ano: 2026
+      2 CARLOS FABRICIO DA SILVA LIMA 3,0 3 4 93,4% Cursando
+      `,
+      "BOLETIM 6C.pdf",
+    );
+
+    expect(students[0].className).toBe("6C");
+  });
+
+  it("uses the class from the file when a real bulletin row only leaves the year", () => {
+    const students = parseStudentsFromText(
+      `
+      Curso: Ensino Fundamental - Anos Finais Turno: Matutino S�rie: 6� Ano Turma: 6� ANO C Ano: 2026
+      2 CARLOS FABRICIO DA SILVA LIMA 3,0 3 4 93,4% Cursando
+      `,
+      "BOLETIM 6C.pdf",
+    );
+
+    expect(students[0].className).toBe("6C");
+  });
 });

@@ -10,6 +10,7 @@ import {
   Filter,
   LayoutDashboard,
   LogIn,
+  MessageCircle,
   Plus,
   Search,
   Sparkles,
@@ -23,6 +24,7 @@ import { type User } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { isStudentBackup } from "./lib/backup";
 import { buildStudentsCsv, buildStudentsJson } from "./lib/exportStudents";
+import { needsNameReview } from "./lib/importReview";
 import { buildStudentsFromImport } from "./lib/importStudents";
 import { readLocalStudents, writeLocalStudents } from "./lib/localStore";
 import { extractStudentsFromPdfs } from "./lib/pdfImport";
@@ -31,6 +33,7 @@ import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from
 import { buildFamilyBriefing, formatDate } from "./lib/report";
 import { supabase } from "./lib/supabase";
 import { createStudent, touchStudent } from "./lib/student";
+import { buildWhatsAppShareUrl } from "./lib/whatsapp";
 import { AlertLevel, ImportedStudent, Incident, Student } from "./types";
 
 const alertLabels: Record<AlertLevel, string> = {
@@ -236,6 +239,11 @@ export default function App() {
         a.localeCompare(b, "pt-BR"),
       ),
     [students],
+  );
+
+  const importReviewCount = useMemo(
+    () => importPreview.filter((student) => needsNameReview(student.name)).length,
+    [importPreview],
   );
 
   const filteredStudents = useMemo(() => {
@@ -456,6 +464,19 @@ export default function App() {
     } catch {
       setMessage("Não consegui copiar automaticamente. Selecione o texto da ficha e copie manualmente.");
     }
+  }
+
+  function shareFamilyBriefingOnWhatsApp() {
+    if (!selectedStudent || !hasProfile(selectedStudent)) {
+      setMessage("Preencha ao menos um campo da ficha antes de enviar pelo WhatsApp.");
+      return;
+    }
+
+    const url = buildWhatsAppShareUrl(familyBriefing);
+    if (!url) return;
+
+    window.open(url, "_blank", "noopener,noreferrer");
+    setMessage("Abri o WhatsApp com a ficha pronta para revisão e envio.");
   }
 
   const familyBriefing = selectedStudent ? buildFamilyBriefing(selectedStudent) : "";
@@ -877,6 +898,10 @@ export default function App() {
                   <Copy size={16} />
                   Copiar ficha
                 </button>
+                <button onClick={shareFamilyBriefingOnWhatsApp}>
+                  <MessageCircle size={16} />
+                  WhatsApp
+                </button>
               </div>
 
               <div className="incident-box">
@@ -949,20 +974,29 @@ export default function App() {
             <div className="modal-header">
               <div>
                 <h2>Alunos encontrados</h2>
-                <p>Corrija nomes, turmas e unidades antes de importar. Repetidos por nome, turma e unidade serão ignorados.</p>
+                <p>
+                  Corrija nomes, turmas e unidades antes de importar. Repetidos por nome, turma e unidade serão ignorados.
+                  {importReviewCount > 0 && <strong> {importReviewCount} nome(s) precisam de revisão.</strong>}
+                </p>
               </div>
               <button className="icon-button" onClick={() => setImportPreview([])} title="Fechar">
                 <X size={18} />
               </button>
             </div>
             <div className="preview-list">
-              {importPreview.slice(0, 120).map((student, index) => (
-                <div className="preview-row" key={`${student.source}-${index}`}>
-                  <input
-                    aria-label={`Nome importado ${index + 1}`}
-                    value={student.name}
-                    onChange={(event) => updateImportPreview(index, "name", event.target.value)}
-                  />
+              {importPreview.slice(0, 120).map((student, index) => {
+                const shouldReviewName = needsNameReview(student.name);
+
+                return (
+                  <div className={`preview-row ${shouldReviewName ? "needs-review" : ""}`} key={`${student.source}-${index}`}>
+                  <div className="preview-name-cell">
+                    <input
+                      aria-label={`Nome importado ${index + 1}`}
+                      value={student.name}
+                      onChange={(event) => updateImportPreview(index, "name", event.target.value)}
+                    />
+                    {shouldReviewName && <span className="review-badge">Revisar nome</span>}
+                  </div>
                   <input
                     aria-label={`Turma importada ${index + 1}`}
                     value={student.className}
@@ -992,8 +1026,9 @@ export default function App() {
                   >
                     <X size={16} />
                   </button>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
             <div className="actions">
               <button onClick={() => setImportPreview([])}>Cancelar</button>

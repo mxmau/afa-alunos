@@ -633,6 +633,25 @@ textarea:focus {
   padding: 10px;
 }
 
+.preview-row.needs-review {
+  background: #fff8e8;
+}
+
+.preview-name-cell {
+  display: grid;
+  gap: 5px;
+}
+
+.review-badge {
+  background: #f1d58a;
+  color: #4a3610;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  justify-self: start;
+  padding: 3px 7px;
+}
+
 .preview-row input,
 .preview-row select {
   min-height: 34px;

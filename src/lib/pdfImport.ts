@@ -89,7 +89,7 @@ export function parseStudentsFromText(text: string, source: string): ImportedStu
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    currentClass = extractClassName(line) || currentClass;
+    if (canContainClassName(line)) currentClass = mergeClassName(currentClass, extractClassName(line));
 
     const sgeStudent = parseSgeRow(line, currentClass, campus, source);
     if (sgeStudent) {
@@ -113,9 +113,9 @@ export function parseStudentsFromText(text: string, source: string): ImportedStu
     }
   }
 
-  if (hasExplicitStatus) return dedupeImported(students);
+  if (hasExplicitStatus) return dedupeImported(applyFallbackClass(students, fallbackClass));
 
-  return dedupeImported(parseGenericList(lines, source, campus, fallbackClass));
+  return dedupeImported(applyFallbackClass(parseGenericList(lines, source, campus, fallbackClass), fallbackClass));
 }
 
 function normalizeLines(text: string): string[] {
@@ -189,7 +189,7 @@ function parseGenericList(lines: string[], source: string, campus: string, initi
   let currentClass = initialClass;
 
   for (const line of lines) {
-    currentClass = extractClassName(line) || currentClass;
+    if (canContainClassName(line)) currentClass = mergeClassName(currentClass, extractClassName(line));
 
     const candidate = cleanupName(line);
     if (!candidate) continue;
@@ -270,11 +270,25 @@ function extractClassName(line: string): string {
   return "";
 }
 
+function canContainClassName(line: string): boolean {
+  return /(turma|classe|ano|s[eé]rie)/i.test(line) || sgeClassPattern.test(line) || classOnlyPattern.test(line);
+}
+
 function extractClassNameFromSource(source: string): string {
   const fileClass = source.match(fileClassPattern);
   if (fileClass?.[1] && fileClass?.[2]) return normalizeClassName(`${fileClass[1]}${fileClass[2]}`);
 
   return "";
+}
+
+function mergeClassName(currentClass: string, detectedClass: string): string {
+  if (!detectedClass) return currentClass;
+  if (!currentClass) return detectedClass;
+  if (/^[0-9]+[A-Z]$/.test(currentClass) && /^[0-9]+$/.test(detectedClass) && currentClass.startsWith(detectedClass)) {
+    return currentClass;
+  }
+
+  return detectedClass;
 }
 
 function normalizeClassName(value: string): string {
@@ -283,6 +297,18 @@ function normalizeClassName(value: string): string {
     .replace(/[ºª°o]/gi, "")
     .replace(/\s+/g, "")
     .toUpperCase();
+}
+
+function applyFallbackClass(students: ImportedStudent[], fallbackClass: string): ImportedStudent[] {
+  if (!fallbackClass) return students;
+
+  return students.map((student) => {
+    if (/^[0-9]+$/.test(student.className) && fallbackClass.startsWith(student.className)) {
+      return { ...student, className: fallbackClass };
+    }
+
+    return student;
+  });
 }
 
 function extractRegistration(line: string): string {

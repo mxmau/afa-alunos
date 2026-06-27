@@ -10,3 +10,7 @@ vite.config.d.ts
 
 # Local Netlify folder
 .netlify
+
+# Student data and bulletins
+*.pdf
+students-import.json

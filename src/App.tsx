@@ -20,7 +20,8 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { type User } from "@supabase/supabase-js";
+import { type User, onAuthStateChanged, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, signOut } from "firebase/auth";
+import { collection, doc, setDoc, deleteDoc, writeBatch, query, where, getDocs } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { isStudentBackup } from "./lib/backup";
 import { buildStudentsCsv, buildStudentsJson } from "./lib/exportStudents";
@@ -31,7 +32,7 @@ import { extractStudentsFromPdfs } from "./lib/pdfImport";
 import { getProfileCompletion, hasProfile, ProfileFilter } from "./lib/profile";
 import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from "./lib/quickPhrases";
 import { buildFamilyBriefing, formatDate } from "./lib/report";
-import { supabase } from "./lib/supabase";
+import { auth, db } from "./lib/firebase";
 import { createStudent, touchStudent } from "./lib/student";
 import { buildWhatsAppShareUrl } from "./lib/whatsapp";
 import { AlertLevel, ImportedStudent, Incident, Student } from "./types";
@@ -120,14 +121,14 @@ type StudentRow = {
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("todas");
   const [campusFilter, setCampusFilter] = useState("todas");
   const [alertFilter, setAlertFilter] = useState<AlertLevel | "todos">("todos");
   const [profileFilter, setProfileFilter] = useState<ProfileFilter>("todos");
   const [hydrated, setHydrated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [localOnly, setLocalOnly] = useState(!supabase);
+  const [localOnly, setLocalOnly] = useState(!db);
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [manualName, setManualName] = useState("");
@@ -142,18 +143,35 @@ export default function App() {
     notes: "",
   });
 
-  const cloudMode = Boolean(supabase && user && !localOnly);
+  const cloudMode = Boolean(db && auth && user && !localOnly);
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!auth) return;
 
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) setLocalOnly(false);
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      if (firebaseUser) setLocalOnly(false);
     });
 
-    return () => data.subscription.unsubscribe();
+    // Check if redirect link for email sign-in is present
+    if (isSignInWithEmailLink(auth, window.location.href)) {
+      let savedEmail = window.localStorage.getItem("emailForSignIn");
+      if (!savedEmail) {
+        savedEmail = window.prompt("Por favor, informe seu e-mail para confirmar o login:");
+      }
+      if (savedEmail) {
+        signInWithEmailLink(auth, savedEmail, window.location.href)
+          .then(() => {
+            window.localStorage.removeItem("emailForSignIn");
+            window.history.replaceState({}, document.title, window.location.pathname);
+          })
+          .catch((error: any) => {
+            setMessage(`Erro ao concluir login: ${error.message}`);
+          });
+      }
+    }
+
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -162,26 +180,37 @@ export default function App() {
     async function load() {
       setHydrated(false);
 
-      if (cloudMode && supabase) {
-        const { data, error } = await supabase
-          .from("afa_students")
-          .select("id,name,class_name,registration,data")
-          .order("name", { ascending: true });
+      if (cloudMode && db && user) {
+        try {
+          const q = query(collection(db, "afa_students"), where("user_id", "==", user.uid));
+          const querySnapshot = await getDocs(q);
 
-        if (!active) return;
-        if (error) {
-          setMessage(`Não consegui carregar do Supabase: ${error.message}`);
-          setStudents(readLocalStudents());
-        } else {
-          const loaded = ((data ?? []) as StudentRow[]).map((row) => ({
-            ...row.data,
-            id: row.id,
-            name: row.name,
-            className: row.class_name ?? row.data.className ?? "",
-            registration: row.registration ?? row.data.registration ?? "",
-          })).map(withStudentDefaults);
+          if (!active) return;
+
+          const loaded: Student[] = [];
+          querySnapshot.forEach((docSnap) => {
+            const rowData = docSnap.data() as any;
+            const studentData = rowData.data as Student;
+            loaded.push(
+              withStudentDefaults({
+                ...studentData,
+                id: docSnap.id,
+                name: rowData.name || studentData.name,
+                className: rowData.class_name || studentData.className || "",
+                registration: rowData.registration || studentData.registration || "",
+                campus: rowData.campus || studentData.campus || "Não definido",
+                status: rowData.student_status || studentData.status || "Cadastrado",
+              })
+            );
+          });
+
+          loaded.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
           setStudents(loaded);
           setSelectedId((current) => current || loaded[0]?.id || "");
+        } catch (error: any) {
+          if (!active) return;
+          setMessage(`Não consegui carregar do Firebase: ${error.message}`);
+          setStudents(readLocalStudents());
         }
       } else {
         const local = readLocalStudents().map(withStudentDefaults);
@@ -202,20 +231,25 @@ export default function App() {
     if (!hydrated) return;
 
     const timer = window.setTimeout(async () => {
-      if (cloudMode && supabase && user) {
-        const rows = students.map((student) => ({
-          id: student.id,
-          user_id: user.id,
-          name: student.name,
-          class_name: student.className,
-          registration: student.registration,
-          data: student,
-          updated_at: new Date().toISOString(),
-        }));
-
-        if (rows.length) {
-          const { error } = await supabase.from("afa_students").upsert(rows);
-          if (error) setMessage(`Não consegui salvar online: ${error.message}`);
+      if (cloudMode && db && user) {
+        try {
+          const batch = writeBatch(db);
+          for (const student of students) {
+            const docRef = doc(db, "afa_students", student.id);
+            batch.set(docRef, {
+              user_id: user.uid,
+              name: student.name,
+              class_name: student.className,
+              registration: student.registration,
+              campus: student.campus || "Não definido",
+              student_status: student.status || "Cadastrado",
+              data: student,
+              updated_at: new Date().toISOString(),
+            });
+          }
+          await batch.commit();
+        } catch (error: any) {
+          setMessage(`Não consegui salvar online: ${error.message}`);
         }
       } else {
         writeLocalStudents(students);
@@ -247,7 +281,7 @@ export default function App() {
   );
 
   const filteredStudents = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase("pt-BR");
+    const normalized = searchQuery.trim().toLocaleLowerCase("pt-BR");
     return students.filter((student) => {
       const matchesQuery =
         !normalized ||
@@ -267,7 +301,7 @@ export default function App() {
 
       return matchesQuery && matchesClass && matchesCampus && matchesAlert && matchesProfile;
     });
-  }, [students, query, classFilter, campusFilter, alertFilter, profileFilter]);
+  }, [students, searchQuery, classFilter, campusFilter, alertFilter, profileFilter]);
 
   const stats = useMemo(() => {
     const withRecords = students.filter((student) => hasProfile(student)).length;
@@ -418,9 +452,10 @@ export default function App() {
     setSelectedId(next[0]?.id || "");
     setDeleteConfirmId("");
 
-    if (cloudMode && supabase) {
-      const { error } = await supabase.from("afa_students").delete().eq("id", selectedStudent.id);
-      if (error) {
+    if (cloudMode && db) {
+      try {
+        await deleteDoc(doc(db, "afa_students", selectedStudent.id));
+      } catch (error: any) {
         setMessage(`Ficha removida localmente, mas não consegui excluir online: ${error.message}`);
         return;
       }
@@ -430,18 +465,30 @@ export default function App() {
   }
 
   async function login() {
-    if (!supabase || !email.trim()) return;
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
-    });
-    setMessage(error ? error.message : "Enviei um link de acesso para seu e-mail.");
+    if (!auth || !email.trim()) return;
+    try {
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: true,
+      };
+      await sendSignInLinkToEmail(auth, email.trim(), actionCodeSettings);
+      window.localStorage.setItem("emailForSignIn", email.trim());
+      setMessage("Enviei um link de acesso para seu e-mail.");
+    } catch (error: any) {
+      setMessage(`Erro ao enviar link de acesso: ${error.message}`);
+    }
   }
 
   async function logout() {
-    if (supabase) await supabase.auth.signOut();
-    setUser(null);
-    setLocalOnly(true);
+    if (auth) {
+      try {
+        await signOut(auth);
+        setUser(null);
+        setLocalOnly(true);
+      } catch (error: any) {
+        setMessage(`Erro ao sair: ${error.message}`);
+      }
+    }
   }
 
   function exportJson() {
@@ -497,7 +544,7 @@ export default function App() {
 
         <section className="login-strip">
           <Cloud size={17} />
-          {supabase ? (
+          {auth ? (
             user && !localOnly ? (
               <>
                 <span>{user.email}</span>
@@ -524,7 +571,7 @@ export default function App() {
               </div>
             )
           ) : (
-            <span>Configure o Supabase para login</span>
+            <span>Configure o Firebase para login</span>
           )}
         </section>
 
@@ -572,8 +619,8 @@ export default function App() {
           <Search size={16} />
           <input
             aria-label="Buscar aluno ou tag"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Buscar aluno ou tag"
           />
         </div>

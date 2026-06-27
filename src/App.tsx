@@ -21,12 +21,16 @@ import {
 } from "lucide-react";
 import { type User } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
+import { isStudentBackup } from "./lib/backup";
+import { buildStudentsCsv, buildStudentsJson } from "./lib/exportStudents";
+import { buildStudentsFromImport } from "./lib/importStudents";
 import { readLocalStudents, writeLocalStudents } from "./lib/localStore";
 import { extractStudentsFromPdfs } from "./lib/pdfImport";
+import { getProfileCompletion, hasProfile, ProfileFilter } from "./lib/profile";
 import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from "./lib/quickPhrases";
 import { buildFamilyBriefing, formatDate } from "./lib/report";
 import { supabase } from "./lib/supabase";
-import { createStudent, studentKey, touchStudent } from "./lib/student";
+import { createStudent, touchStudent } from "./lib/student";
 import { AlertLevel, ImportedStudent, Incident, Student } from "./types";
 
 const alertLabels: Record<AlertLevel, string> = {
@@ -115,6 +119,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [classFilter, setClassFilter] = useState("todas");
+  const [campusFilter, setCampusFilter] = useState("todas");
+  const [alertFilter, setAlertFilter] = useState<AlertLevel | "todos">("todos");
+  const [profileFilter, setProfileFilter] = useState<ProfileFilter>("todos");
   const [hydrated, setHydrated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [localOnly, setLocalOnly] = useState(!supabase);
@@ -122,8 +129,10 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualClass, setManualClass] = useState("");
+  const [manualCampus, setManualCampus] = useState("São Lourenço");
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportedStudent[]>([]);
+  const [deleteConfirmId, setDeleteConfirmId] = useState("");
   const [incidentDraft, setIncidentDraft] = useState({
     type: "observacao" as Incident["type"],
     title: "",
@@ -167,12 +176,12 @@ export default function App() {
             name: row.name,
             className: row.class_name ?? row.data.className ?? "",
             registration: row.registration ?? row.data.registration ?? "",
-          }));
+          })).map(withStudentDefaults);
           setStudents(loaded);
           setSelectedId((current) => current || loaded[0]?.id || "");
         }
       } else {
-        const local = readLocalStudents();
+        const local = readLocalStudents().map(withStudentDefaults);
         setStudents(local);
         setSelectedId((current) => current || local[0]?.id || "");
       }
@@ -221,6 +230,13 @@ export default function App() {
       ),
     [students],
   );
+  const campuses = useMemo(
+    () =>
+      [...new Set(students.map((student) => student.campus || "Não definido").filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, "pt-BR"),
+      ),
+    [students],
+  );
 
   const filteredStudents = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("pt-BR");
@@ -230,15 +246,27 @@ export default function App() {
         student.name.toLocaleLowerCase("pt-BR").includes(normalized) ||
         student.tags.some((tag) => tag.toLocaleLowerCase("pt-BR").includes(normalized));
       const matchesClass = classFilter === "todas" || student.className === classFilter;
-      return matchesQuery && matchesClass;
+      const matchesCampus = campusFilter === "todas" || (student.campus || "Não definido") === campusFilter;
+      const matchesAlert = alertFilter === "todos" || student.alertLevel === alertFilter;
+      const studentHasProfile = hasProfile(student);
+      const completion = getProfileCompletion(student);
+      const matchesProfile =
+        profileFilter === "todos" ||
+        (profileFilter === "com-ficha" && studentHasProfile) ||
+        (profileFilter === "sem-ficha" && !studentHasProfile) ||
+        (profileFilter === "completa" && completion.isComplete) ||
+        (profileFilter === "incompleta" && !completion.isComplete);
+
+      return matchesQuery && matchesClass && matchesCampus && matchesAlert && matchesProfile;
     });
-  }, [students, query, classFilter]);
+  }, [students, query, classFilter, campusFilter, alertFilter, profileFilter]);
 
   const stats = useMemo(() => {
     const withRecords = students.filter((student) => hasProfile(student)).length;
+    const complete = students.filter((student) => getProfileCompletion(student).isComplete).length;
     const priority = students.filter((student) => student.alertLevel === "prioridade").length;
     const incidents = students.reduce((total, student) => total + student.incidents.length, 0);
-    return { withRecords, priority, incidents };
+    return { withRecords, complete, priority, incidents };
   }, [students]);
 
   function updateStudent(id: string, updater: (student: Student) => Student) {
@@ -253,6 +281,8 @@ export default function App() {
     const student = createStudent({
       name: manualName,
       className: manualClass,
+      campus: manualCampus,
+      status: "Cadastrado",
       source: "manual",
     });
     setStudents((current) => [student, ...current]);
@@ -277,16 +307,51 @@ export default function App() {
     }
   }
 
+  async function handleBackupImport(file: File | null) {
+    if (!file) return;
+
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!Array.isArray(parsed)) throw new Error("O arquivo precisa ser um backup JSON exportado pelo app.");
+
+      const restored = parsed.filter(isStudentBackup).map(withStudentDefaults);
+      if (!restored.length) throw new Error("Não encontrei alunos válidos nesse backup.");
+
+      const existing = new Map(students.map((student) => [student.id, student]));
+      for (const student of restored) {
+        existing.set(student.id, touchStudent(student));
+      }
+
+      const merged = [...existing.values()].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      setStudents(merged);
+      setSelectedId(restored[0]?.id || merged[0]?.id || "");
+      setMessage(`${restored.length} aluno(s) restaurado(s) do backup.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não consegui restaurar esse backup.");
+    }
+  }
+
   function confirmImport() {
-    const existing = new Set(students.map(studentKey));
-    const created = importPreview
-      .filter((student) => !existing.has(studentKey({ name: student.name, className: student.className })))
-      .map(createStudent);
+    const created = buildStudentsFromImport(importPreview, students);
 
     setStudents((current) => [...created, ...current].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
     setSelectedId(created[0]?.id || selectedId);
     setMessage(`${created.length} aluno(s) adicionados. Duplicados foram ignorados.`);
     setImportPreview([]);
+  }
+
+  function updateImportPreview(
+    index: number,
+    field: keyof Pick<ImportedStudent, "name" | "className" | "campus" | "status">,
+    value: string,
+  ) {
+    setImportPreview((current) =>
+      current.map((student, currentIndex) => (currentIndex === index ? { ...student, [field]: value } : student)),
+    );
+  }
+
+  function removeImportPreview(index: number) {
+    setImportPreview((current) => current.filter((_, currentIndex) => currentIndex !== index));
   }
 
   function applyQuickProfile(template: (typeof quickProfiles)[number]) {
@@ -339,13 +404,21 @@ export default function App() {
 
   async function deleteSelected() {
     if (!selectedStudent) return;
+
     const next = students.filter((student) => student.id !== selectedStudent.id);
     setStudents(next);
     setSelectedId(next[0]?.id || "");
+    setDeleteConfirmId("");
 
     if (cloudMode && supabase) {
-      await supabase.from("afa_students").delete().eq("id", selectedStudent.id);
+      const { error } = await supabase.from("afa_students").delete().eq("id", selectedStudent.id);
+      if (error) {
+        setMessage(`Ficha removida localmente, mas não consegui excluir online: ${error.message}`);
+        return;
+      }
     }
+
+    setMessage(`Ficha de ${selectedStudent.name} excluída.`);
   }
 
   async function login() {
@@ -364,20 +437,29 @@ export default function App() {
   }
 
   function exportJson() {
-    downloadFile("afa-alunos.json", JSON.stringify(students, null, 2), "application/json");
+    downloadFile("afa-alunos.json", buildStudentsJson(students), "application/json");
   }
 
   function exportCsv() {
-    const headers = ["nome", "turma", "nivel", "tags", "resumo"];
-    const rows = students.map((student) =>
-      [student.name, student.className, alertLabels[student.alertLevel], student.tags.join("; "), student.profile.resumoRapido]
-        .map(csvCell)
-        .join(","),
-    );
-    downloadFile("afa-alunos.csv", [headers.join(","), ...rows].join("\n"), "text/csv;charset=utf-8");
+    downloadFile("afa-alunos.csv", buildStudentsCsv(students), "text/csv;charset=utf-8");
+  }
+
+  async function copyFamilyBriefing() {
+    if (!selectedStudent || !hasProfile(selectedStudent)) {
+      setMessage("Preencha ao menos um campo da ficha antes de copiar.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(familyBriefing);
+      setMessage("Ficha copiada para a área de transferência.");
+    } catch {
+      setMessage("Não consegui copiar automaticamente. Selecione o texto da ficha e copie manualmente.");
+    }
   }
 
   const familyBriefing = selectedStudent ? buildFamilyBriefing(selectedStudent) : "";
+  const selectedCompletion = selectedStudent ? getProfileCompletion(selectedStudent) : null;
 
   return (
     <main className="app-shell">
@@ -405,6 +487,7 @@ export default function App() {
             ) : (
               <div className="login-form">
                 <input
+                  aria-label="E-mail para login"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="seu e-mail"
@@ -426,13 +509,38 @@ export default function App() {
 
         <label className="upload-zone">
           <Upload size={20} />
-          <span>{importing ? "Lendo PDFs..." : "Importar DPFs em PDF"}</span>
-          <input type="file" accept="application/pdf" multiple onChange={(event) => handlePdfImport(event.target.files)} />
+          <span>{importing ? "Lendo PDFs..." : "Importar PDFs"}</span>
+          <input
+            aria-label="Importar PDFs com alunos"
+            type="file"
+            accept="application/pdf"
+            multiple
+            onChange={(event) => handlePdfImport(event.target.files)}
+          />
         </label>
 
         <div className="manual-add">
-          <input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="Nome do aluno" />
-          <input value={manualClass} onChange={(event) => setManualClass(event.target.value)} placeholder="Turma" />
+          <input
+            aria-label="Nome do aluno"
+            value={manualName}
+            onChange={(event) => setManualName(event.target.value)}
+            placeholder="Nome do aluno"
+          />
+          <input
+            aria-label="Turma do aluno"
+            value={manualClass}
+            onChange={(event) => setManualClass(event.target.value)}
+            placeholder="Turma"
+          />
+          <select
+            aria-label="Unidade do aluno"
+            value={manualCampus}
+            onChange={(event) => setManualCampus(event.target.value)}
+          >
+            <option value="São Lourenço">São Lourenço</option>
+            <option value="Igarassu">Igarassu</option>
+            <option value="Não definido">Não definido</option>
+          </select>
           <button onClick={addManualStudent}>
             <Plus size={16} />
             Adicionar
@@ -441,18 +549,74 @@ export default function App() {
 
         <div className="search-box">
           <Search size={16} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar aluno ou tag" />
+          <input
+            aria-label="Buscar aluno ou tag"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar aluno ou tag"
+          />
         </div>
 
         <div className="filter-row">
           <Filter size={16} />
-          <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
+          <select
+            aria-label="Filtrar por turma"
+            value={classFilter}
+            onChange={(event) => setClassFilter(event.target.value)}
+          >
             <option value="todas">Todas as turmas</option>
             {classes.map((className) => (
               <option key={className} value={className}>
                 {className}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div className="filter-row">
+          <Cloud size={16} />
+          <select
+            aria-label="Filtrar por unidade"
+            value={campusFilter}
+            onChange={(event) => setCampusFilter(event.target.value)}
+          >
+            <option value="todas">Todas as unidades</option>
+            {campuses.map((campus) => (
+              <option key={campus} value={campus}>
+                {campus}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="filter-row">
+          <AlertTriangle size={16} />
+          <select
+            aria-label="Filtrar por nível de atenção"
+            value={alertFilter}
+            onChange={(event) => setAlertFilter(event.target.value as AlertLevel | "todos")}
+          >
+            <option value="todos">Todos os níveis</option>
+            {Object.entries(alertLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="filter-row">
+          <ClipboardList size={16} />
+          <select
+            aria-label="Filtrar por status da ficha"
+            value={profileFilter}
+            onChange={(event) => setProfileFilter(event.target.value as ProfileFilter)}
+          >
+            <option value="todos">Todas as fichas</option>
+            <option value="com-ficha">Com ficha iniciada</option>
+            <option value="completa">Ficha completa</option>
+            <option value="incompleta">Ficha incompleta</option>
+            <option value="sem-ficha">Sem ficha iniciada</option>
           </select>
         </div>
 
@@ -466,10 +630,19 @@ export default function App() {
               <span className={`status-dot ${student.alertLevel}`} />
               <span>
                 <strong>{student.name}</strong>
-                <small>{student.className || "Sem turma"}</small>
+                <small>
+                  {student.className || "Sem turma"} · {student.campus || "Não definido"} ·{" "}
+                  {getProfileCompletion(student).percentage}% da ficha
+                </small>
               </span>
             </button>
           ))}
+          {students.length > 0 && filteredStudents.length === 0 && (
+            <div className="empty-list">
+              <strong>Nenhum aluno encontrado</strong>
+              <span>Ajuste a busca ou os filtros para ver outros alunos.</span>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -488,6 +661,19 @@ export default function App() {
               <Download size={16} />
               Backup
             </button>
+            <label className="file-action">
+              <Upload size={16} />
+              Restaurar
+              <input
+                aria-label="Restaurar backup JSON"
+                type="file"
+                accept="application/json"
+                onChange={(event) => {
+                  void handleBackupImport(event.target.files?.[0] ?? null);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
           </div>
         </header>
 
@@ -500,7 +686,8 @@ export default function App() {
 
         <section className="metrics">
           <Metric icon={<Users size={19} />} label="Alunos" value={students.length} />
-          <Metric icon={<LayoutDashboard size={19} />} label="Com ficha" value={stats.withRecords} />
+          <Metric icon={<LayoutDashboard size={19} />} label="Iniciadas" value={stats.withRecords} />
+          <Metric icon={<ClipboardList size={19} />} label="Completas" value={stats.complete} />
           <Metric icon={<AlertTriangle size={19} />} label="Prioridade" value={stats.priority} />
           <Metric icon={<BookOpen size={19} />} label="Registros" value={stats.incidents} />
         </section>
@@ -511,6 +698,7 @@ export default function App() {
               <div className="student-header">
                 <div>
                   <input
+                    aria-label="Nome do aluno selecionado"
                     className="student-name"
                     value={selectedStudent.name}
                     onChange={(event) =>
@@ -519,6 +707,7 @@ export default function App() {
                   />
                   <div className="student-meta">
                     <input
+                      aria-label="Turma do aluno selecionado"
                       value={selectedStudent.className}
                       onChange={(event) =>
                         updateStudent(selectedStudent.id, (student) => ({ ...student, className: event.target.value }))
@@ -526,18 +715,51 @@ export default function App() {
                       placeholder="Turma"
                     />
                     <input
+                      aria-label="Matrícula do aluno selecionado"
                       value={selectedStudent.registration}
                       onChange={(event) =>
                         updateStudent(selectedStudent.id, (student) => ({ ...student, registration: event.target.value }))
                       }
                       placeholder="Matrícula"
                     />
+                    <select
+                      aria-label="Unidade do aluno selecionado"
+                      value={selectedStudent.campus || "Não definido"}
+                      onChange={(event) =>
+                        updateStudent(selectedStudent.id, (student) => ({ ...student, campus: event.target.value }))
+                      }
+                    >
+                      <option value="São Lourenço">São Lourenço</option>
+                      <option value="Igarassu">Igarassu</option>
+                      <option value="Não definido">Não definido</option>
+                    </select>
+                    <input
+                      aria-label="Status escolar do aluno selecionado"
+                      value={selectedStudent.status || "Cadastrado"}
+                      onChange={(event) =>
+                        updateStudent(selectedStudent.id, (student) => ({ ...student, status: event.target.value }))
+                      }
+                      placeholder="Status"
+                    />
                   </div>
                 </div>
-                <button className="danger" onClick={deleteSelected}>
-                  <Trash2 size={16} />
-                  Excluir
-                </button>
+                {deleteConfirmId === selectedStudent.id ? (
+                  <div className="delete-confirm">
+                    <span>Excluir ficha?</span>
+                    <button type="button" onClick={() => setDeleteConfirmId("")}>
+                      Cancelar
+                    </button>
+                    <button className="danger" type="button" onClick={deleteSelected}>
+                      <Trash2 size={16} />
+                      Confirmar
+                    </button>
+                  </div>
+                ) : (
+                  <button className="danger" onClick={() => setDeleteConfirmId(selectedStudent.id)}>
+                    <Trash2 size={16} />
+                    Excluir
+                  </button>
+                )}
               </div>
 
               <div className="quick-row">
@@ -562,6 +784,24 @@ export default function App() {
                   </button>
                 ))}
               </div>
+
+              {selectedCompletion && (
+                <div className="completion-box">
+                  <div>
+                    <strong>Progresso da ficha</strong>
+                    <span>
+                      {selectedCompletion.completed}/{selectedCompletion.total} campos essenciais ·{" "}
+                      {selectedCompletion.percentage}%
+                    </span>
+                  </div>
+                  <div className="completion-track" aria-label={`Ficha ${selectedCompletion.percentage}% completa`}>
+                    <span style={{ width: `${selectedCompletion.percentage}%` }} />
+                  </div>
+                  {!selectedCompletion.isComplete && (
+                    <p>Falta preencher: {selectedCompletion.missingLabels.join(", ")}.</p>
+                  )}
+                </div>
+              )}
 
               <ProfileField
                 label="Resumo rápido"
@@ -633,7 +873,7 @@ export default function App() {
                   <FilePlus size={16} />
                   Montar resumo
                 </button>
-                <button onClick={() => navigator.clipboard.writeText(familyBriefing)}>
+                <button onClick={copyFamilyBriefing}>
                   <Copy size={16} />
                   Copiar ficha
                 </button>
@@ -642,6 +882,7 @@ export default function App() {
               <div className="incident-box">
                 <h3>Registro rápido</h3>
                 <select
+                  aria-label="Tipo do registro"
                   value={incidentDraft.type}
                   onChange={(event) =>
                     setIncidentDraft((current) => ({ ...current, type: event.target.value as Incident["type"] }))
@@ -654,11 +895,13 @@ export default function App() {
                   ))}
                 </select>
                 <input
+                  aria-label="Título do registro"
                   value={incidentDraft.title}
                   onChange={(event) => setIncidentDraft((current) => ({ ...current, title: event.target.value }))}
                   placeholder="Título do registro"
                 />
                 <textarea
+                  aria-label="Detalhe do registro"
                   value={incidentDraft.notes}
                   onChange={(event) => setIncidentDraft((current) => ({ ...current, notes: event.target.value }))}
                   placeholder="Detalhe curto"
@@ -694,7 +937,7 @@ export default function App() {
         ) : (
           <section className="empty-state">
             <Users size={38} />
-            <h2>Comece importando os DPFs ou cadastrando um aluno.</h2>
+            <h2>Comece importando PDFs ou cadastrando um aluno.</h2>
             <p>Depois disso, cada aluno aparece na lista lateral para montar a ficha em poucos passos.</p>
           </section>
         )}
@@ -706,7 +949,7 @@ export default function App() {
             <div className="modal-header">
               <div>
                 <h2>Alunos encontrados</h2>
-                <p>Confirme a importação. Alunos repetidos por nome e turma serão ignorados.</p>
+                <p>Corrija nomes, turmas e unidades antes de importar. Repetidos por nome, turma e unidade serão ignorados.</p>
               </div>
               <button className="icon-button" onClick={() => setImportPreview([])} title="Fechar">
                 <X size={18} />
@@ -714,9 +957,41 @@ export default function App() {
             </div>
             <div className="preview-list">
               {importPreview.slice(0, 120).map((student, index) => (
-                <div key={`${student.name}-${index}`}>
-                  <strong>{student.name}</strong>
-                  <span>{student.className || "Sem turma detectada"}</span>
+                <div className="preview-row" key={`${student.source}-${index}`}>
+                  <input
+                    aria-label={`Nome importado ${index + 1}`}
+                    value={student.name}
+                    onChange={(event) => updateImportPreview(index, "name", event.target.value)}
+                  />
+                  <input
+                    aria-label={`Turma importada ${index + 1}`}
+                    value={student.className}
+                    onChange={(event) => updateImportPreview(index, "className", event.target.value)}
+                    placeholder="Sem turma"
+                  />
+                  <select
+                    aria-label={`Unidade importada ${index + 1}`}
+                    value={student.campus}
+                    onChange={(event) => updateImportPreview(index, "campus", event.target.value)}
+                  >
+                    <option value="São Lourenço">São Lourenço</option>
+                    <option value="Igarassu">Igarassu</option>
+                    <option value="Não definido">Não definido</option>
+                  </select>
+                  <input
+                    aria-label={`Status importado ${index + 1}`}
+                    value={student.status}
+                    onChange={(event) => updateImportPreview(index, "status", event.target.value)}
+                    placeholder="Status"
+                  />
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={() => removeImportPreview(index)}
+                    title="Remover aluno da importação"
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
               ))}
             </div>
@@ -775,10 +1050,16 @@ function ProfileField({
   return (
     <div className="profile-field">
       <span>{label}</span>
-      <textarea value={value} placeholder={placeholder || "Digite frases curtas e objetivas."} onChange={(event) => onChange(event.target.value)} />
+      <textarea
+        aria-label={label}
+        value={value}
+        placeholder={placeholder || "Digite frases curtas e objetivas."}
+        onChange={(event) => onChange(event.target.value)}
+      />
       {groups && <PhrasePicker groups={groups} onPick={(phrase) => onChange(appendPhrase(value, phrase))} />}
       <div className="custom-phrase">
         <input
+          aria-label={`Complemento para ${label}`}
           value={customPhrase}
           onChange={(event) => setCustomPhrase(event.target.value)}
           placeholder="Complemento próprio"
@@ -820,12 +1101,12 @@ function PhrasePicker({
   );
 }
 
-function hasProfile(student: Student): boolean {
-  return Object.values(student.profile).some(Boolean) || student.incidents.length > 0 || student.tags.length > 0;
-}
-
-function csvCell(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+function withStudentDefaults(student: Student): Student {
+  return {
+    ...student,
+    campus: student.campus || "Não definido",
+    status: student.status || "Cadastrado",
+  };
 }
 
 function downloadFile(name: string, content: string, type: string) {

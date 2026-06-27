@@ -4,9 +4,14 @@ create table if not exists public.afa_students (
   name text not null,
   class_name text,
   registration text,
+  campus text,
+  student_status text,
   data jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
+
+alter table public.afa_students add column if not exists campus text;
+alter table public.afa_students add column if not exists student_status text;
 
 alter table public.afa_students enable row level security;
 

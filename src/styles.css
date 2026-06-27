@@ -37,7 +37,28 @@ button {
   padding: 9px 12px;
 }
 
+.file-action {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cdd6cc;
+  color: #172019;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  justify-content: center;
+  min-height: 38px;
+  padding: 9px 12px;
+}
+
+.file-action input {
+  display: none;
+}
+
 button:hover {
+  border-color: #79947b;
+}
+
+.file-action:hover {
   border-color: #79947b;
 }
 
@@ -204,6 +225,24 @@ textarea:focus {
   color: rgba(255, 255, 255, 0.78);
 }
 
+.empty-list {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #d5ddd2;
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+}
+
+.empty-list strong,
+.empty-list span {
+  display: block;
+}
+
+.empty-list span {
+  color: #647068;
+  font-size: 0.88rem;
+}
+
 .status-dot {
   background: #89b576;
   display: inline-block;
@@ -330,6 +369,28 @@ textarea:focus {
   margin-top: 8px;
 }
 
+.delete-confirm {
+  align-items: center;
+  background: #fff7f4;
+  border: 1px solid #ebc7be;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.delete-confirm span {
+  color: #9f2d19;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.delete-confirm button {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
 .quick-row,
 .level-row {
   display: flex;
@@ -345,6 +406,49 @@ textarea:focus {
 .level-row button.selected {
   border-color: #2f6948;
   box-shadow: 0 0 0 3px rgba(47, 105, 72, 0.14);
+}
+
+.completion-box {
+  background: #f8faf6;
+  border: 1px solid #e1e6df;
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+}
+
+.completion-box div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.completion-box strong,
+.completion-box span,
+.completion-box p {
+  font-size: 0.9rem;
+}
+
+.completion-box span,
+.completion-box p {
+  color: #647068;
+}
+
+.completion-box p {
+  margin: 0;
+}
+
+.completion-track {
+  background: #dfe7dc;
+  height: 8px;
+  overflow: hidden;
+}
+
+.completion-track span {
+  background: #2f6948;
+  display: block;
+  height: 100%;
 }
 
 .field-grid {
@@ -520,16 +624,18 @@ textarea:focus {
   overflow: auto;
 }
 
-.preview-list div {
+.preview-row {
   align-items: center;
   background: #f8faf6;
-  display: flex;
-  justify-content: space-between;
-  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) minmax(80px, 110px) minmax(130px, 160px) minmax(110px, 140px) auto;
+  padding: 10px;
 }
 
-.preview-list span {
-  color: #647068;
+.preview-row input,
+.preview-row select {
+  min-height: 34px;
 }
 
 .icon-button {
@@ -565,7 +671,8 @@ textarea:focus {
 
   .metrics,
   .field-grid,
-  .student-meta {
+  .student-meta,
+  .preview-row {
     grid-template-columns: 1fr;
   }
 }

@@ -25,6 +25,8 @@ export type Student = {
   name: string;
   className: string;
   registration: string;
+  campus: string;
+  status: string;
   source: string;
   tags: string[];
   alertLevel: AlertLevel;
@@ -38,5 +40,7 @@ export type ImportedStudent = {
   name: string;
   className: string;
   registration: string;
+  campus: string;
+  status: string;
   source: string;
 };

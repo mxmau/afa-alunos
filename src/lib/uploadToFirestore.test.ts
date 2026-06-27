@@ -5,7 +5,9 @@ import { initializeApp } from "firebase/app";
 import { getFirestore, doc, writeBatch } from "firebase/firestore";
 
 describe("Script: Upload Students to Firestore", () => {
-  it("uploads all students from students-import.json to Firestore", async () => {
+  const uploadIt = process.env.RUN_FIRESTORE_UPLOAD === "1" ? it : it.skip;
+
+  uploadIt("uploads all students from students-import.json to Firestore", async () => {
 
     const firebaseConfig = {
       apiKey: process.env.VITE_FIREBASE_API_KEY,

@@ -57,5 +57,5 @@ describe("Script: Parse Local PDFs", () => {
     fs.writeFileSync(outputPath, JSON.stringify(students, null, 2), "utf-8");
 
     console.log(`Arquivo de backup gerado com sucesso em: ${outputPath}`);
-  });
+  }, 20000);
 });

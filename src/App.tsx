@@ -28,7 +28,6 @@ import { buildStudentsCsv, buildStudentsJson } from "./lib/exportStudents";
 import { needsNameReview } from "./lib/importReview";
 import { buildStudentsFromImport } from "./lib/importStudents";
 import { readLocalStudents, writeLocalStudents } from "./lib/localStore";
-import { extractStudentsFromPdfs } from "./lib/pdfImport";
 import { getProfileCompletion, hasProfile, ProfileFilter } from "./lib/profile";
 import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from "./lib/quickPhrases";
 import { buildFamilyBriefing, formatDate } from "./lib/report";
@@ -182,16 +181,19 @@ export default function App() {
 
       if (cloudMode && db && user) {
         try {
-          const q = query(collection(db, "afa_students"), where("user_id", "==", user.uid));
-          const querySnapshot = await getDocs(q);
+          const qUser = query(collection(db, "afa_students"), where("user_id", "==", user.uid));
+          const qImport = query(collection(db, "afa_students"), where("user_id", "==", "mxmau96_imported"));
+          const [userSnap, importSnap] = await Promise.all([getDocs(qUser), getDocs(qImport)]);
 
           if (!active) return;
 
-          const loaded: Student[] = [];
-          querySnapshot.forEach((docSnap) => {
+          const loadedMap = new Map<string, Student>();
+
+          userSnap.forEach((docSnap) => {
             const rowData = docSnap.data() as any;
             const studentData = rowData.data as Student;
-            loaded.push(
+            loadedMap.set(
+              docSnap.id,
               withStudentDefaults({
                 ...studentData,
                 id: docSnap.id,
@@ -204,6 +206,45 @@ export default function App() {
             );
           });
 
+          const toMigrate: Student[] = [];
+          importSnap.forEach((docSnap) => {
+            const rowData = docSnap.data() as any;
+            const studentData = rowData.data as Student;
+            const student = withStudentDefaults({
+              ...studentData,
+              id: docSnap.id,
+              name: rowData.name || studentData.name,
+              className: rowData.class_name || studentData.className || "",
+              registration: rowData.registration || studentData.registration || "",
+              campus: rowData.campus || studentData.campus || "Não definido",
+              status: rowData.student_status || studentData.status || "Cadastrado",
+            });
+
+            if (!loadedMap.has(student.id)) {
+              loadedMap.set(student.id, student);
+              toMigrate.push(student);
+            }
+          });
+
+          if (toMigrate.length > 0) {
+            const batch = writeBatch(db);
+            for (const student of toMigrate) {
+              const docRef = doc(db, "afa_students", student.id);
+              batch.set(docRef, {
+                user_id: user.uid,
+                name: student.name,
+                class_name: student.className,
+                registration: student.registration,
+                campus: student.campus || "Não definido",
+                student_status: student.status || "Cadastrado",
+                data: student,
+                updated_at: new Date().toISOString(),
+              });
+            }
+            await batch.commit();
+          }
+
+          const loaded = [...loadedMap.values()];
           loaded.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
           setStudents(loaded);
           setSelectedId((current) => current || loaded[0]?.id || "");
@@ -339,6 +380,7 @@ export default function App() {
     setMessage("");
 
     try {
+      const { extractStudentsFromPdfs } = await import("./lib/pdfImport");
       const imported = await extractStudentsFromPdfs([...files]);
       setImportPreview(imported);
       setMessage(`${imported.length} possível(is) aluno(s) encontrado(s). Revise e confirme.`);
@@ -528,6 +570,36 @@ export default function App() {
 
   const familyBriefing = selectedStudent ? buildFamilyBriefing(selectedStudent) : "";
   const selectedCompletion = selectedStudent ? getProfileCompletion(selectedStudent) : null;
+
+  if (!user) {
+    return (
+      <main className="login-screen">
+        <div className="login-card animate-fade-in">
+          <div className="login-logo">
+            <ClipboardList size={40} />
+          </div>
+          <h1>AFA Alunos</h1>
+          <p>Painel de acompanhamento formativo dos alunos.</p>
+          
+          <div className="login-input-group">
+            <input
+              aria-label="E-mail para login"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="Digite seu e-mail"
+              type="email"
+            />
+            <button onClick={login}>
+              <LogIn size={18} />
+              Enviar Link de Acesso
+            </button>
+          </div>
+          
+          {message && <div className="login-message">{message}</div>}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">

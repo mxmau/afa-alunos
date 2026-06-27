@@ -32,8 +32,10 @@ export async function extractStudentsFromPdfs(files: File[]): Promise<ImportedSt
 async function extractPdfText(file: File): Promise<string> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   if (typeof window === "undefined") {
-    const path = await import("path");
-    const { pathToFileURL } = await import("url");
+    const pathModule = "path";
+    const urlModule = "url";
+    const path = await import(/* @vite-ignore */ pathModule);
+    const { pathToFileURL } = await import(/* @vite-ignore */ urlModule);
     const resolved = path.resolve("node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs");
     pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(resolved).toString();
   } else {

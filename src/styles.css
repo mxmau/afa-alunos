@@ -360,11 +360,66 @@ textarea:focus {
 }
 
 .profile-field span,
-.incident-box h3 {
+.incident-box h3,
+.phrase-group strong {
   color: #344239;
   font-size: 0.86rem;
   font-weight: 750;
   text-transform: uppercase;
+}
+
+.phrase-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.phrase-group {
+  background: #f8faf6;
+  border: 1px solid #e1e6df;
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+}
+
+.phrase-group strong {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.phrase-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.phrase-chips button {
+  background: #ffffff;
+  border-color: #d5ddd2;
+  color: #344239;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  min-height: 30px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.phrase-chips button:hover {
+  background: #eef3eb;
+  border-color: #79947b;
+}
+
+.custom-phrase {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.custom-phrase input,
+.custom-phrase button {
+  min-height: 34px;
 }
 
 .panel-title {

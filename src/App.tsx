@@ -12,6 +12,7 @@ import {
   LogIn,
   Plus,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   UserRound,
@@ -22,6 +23,7 @@ import { type User } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { readLocalStudents, writeLocalStudents } from "./lib/localStore";
 import { extractStudentsFromPdfs } from "./lib/pdfImport";
+import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from "./lib/quickPhrases";
 import { buildFamilyBriefing, formatDate } from "./lib/report";
 import { supabase } from "./lib/supabase";
 import { createStudent, studentKey, touchStudent } from "./lib/student";
@@ -565,48 +567,57 @@ export default function App() {
                 label="Resumo rápido"
                 value={selectedStudent.profile.resumoRapido}
                 onChange={(value) => updateProfile(selectedStudent.id, "resumoRapido", value)}
+                groups={profilePhraseBank.resumoRapido}
                 placeholder="Uma síntese em 2 ou 3 frases para abrir a conversa com a família."
               />
               <div className="field-grid">
                 <ProfileField
-                  label="Personalidade"
+                  label="Perfil observado"
                   value={selectedStudent.profile.personalidade}
                   onChange={(value) => updateProfile(selectedStudent.id, "personalidade", value)}
+                  groups={profilePhraseBank.personalidade}
                 />
                 <ProfileField
                   label="Aspectos positivos"
                   value={selectedStudent.profile.positivos}
                   onChange={(value) => updateProfile(selectedStudent.id, "positivos", value)}
+                  groups={profilePhraseBank.positivos}
                 />
                 <ProfileField
                   label="Pontos de atenção"
                   value={selectedStudent.profile.atencao}
                   onChange={(value) => updateProfile(selectedStudent.id, "atencao", value)}
+                  groups={profilePhraseBank.atencao}
                 />
                 <ProfileField
                   label="Social"
                   value={selectedStudent.profile.social}
                   onChange={(value) => updateProfile(selectedStudent.id, "social", value)}
+                  groups={profilePhraseBank.social}
                 />
                 <ProfileField
                   label="Pedagógico"
                   value={selectedStudent.profile.pedagogico}
                   onChange={(value) => updateProfile(selectedStudent.id, "pedagogico", value)}
+                  groups={profilePhraseBank.pedagogico}
                 />
                 <ProfileField
                   label="Precisa melhorar"
                   value={selectedStudent.profile.melhorar}
                   onChange={(value) => updateProfile(selectedStudent.id, "melhorar", value)}
+                  groups={profilePhraseBank.melhorar}
                 />
                 <ProfileField
                   label="Precisa manter"
                   value={selectedStudent.profile.manter}
                   onChange={(value) => updateProfile(selectedStudent.id, "manter", value)}
+                  groups={profilePhraseBank.manter}
                 />
                 <ProfileField
                   label="Apoio da família"
                   value={selectedStudent.profile.apoioFamilia}
                   onChange={(value) => updateProfile(selectedStudent.id, "apoioFamilia", value)}
+                  groups={profilePhraseBank.apoioFamilia}
                 />
               </div>
             </section>
@@ -651,6 +662,15 @@ export default function App() {
                   value={incidentDraft.notes}
                   onChange={(event) => setIncidentDraft((current) => ({ ...current, notes: event.target.value }))}
                   placeholder="Detalhe curto"
+                />
+                <PhrasePicker
+                  groups={incidentPhraseBank}
+                  onPick={(phrase) =>
+                    setIncidentDraft((current) => ({
+                      ...current,
+                      notes: appendPhrase(current.notes, phrase),
+                    }))
+                  }
                 />
                 <button onClick={addIncident}>
                   <Plus size={16} />
@@ -735,18 +755,68 @@ function ProfileField({
   label,
   value,
   placeholder,
+  groups,
   onChange,
 }: {
   label: string;
   value: string;
   placeholder?: string;
+  groups?: PhraseGroup[];
   onChange: (value: string) => void;
 }) {
+  const [customPhrase, setCustomPhrase] = useState("");
+
+  function addCustomPhrase() {
+    if (!customPhrase.trim()) return;
+    onChange(appendPhrase(value, customPhrase));
+    setCustomPhrase("");
+  }
+
   return (
-    <label className="profile-field">
+    <div className="profile-field">
       <span>{label}</span>
       <textarea value={value} placeholder={placeholder || "Digite frases curtas e objetivas."} onChange={(event) => onChange(event.target.value)} />
-    </label>
+      {groups && <PhrasePicker groups={groups} onPick={(phrase) => onChange(appendPhrase(value, phrase))} />}
+      <div className="custom-phrase">
+        <input
+          value={customPhrase}
+          onChange={(event) => setCustomPhrase(event.target.value)}
+          placeholder="Complemento próprio"
+        />
+        <button type="button" onClick={addCustomPhrase}>
+          <Plus size={15} />
+          Inserir
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PhrasePicker({
+  groups,
+  onPick,
+}: {
+  groups: PhraseGroup[];
+  onPick: (phrase: string) => void;
+}) {
+  return (
+    <div className="phrase-picker">
+      {groups.map((group) => (
+        <div className="phrase-group" key={group.title}>
+          <strong>
+            <Sparkles size={13} />
+            {group.title}
+          </strong>
+          <div className="phrase-chips">
+            {group.phrases.map((phrase) => (
+              <button type="button" key={phrase} onClick={() => onPick(phrase)}>
+                {phrase}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

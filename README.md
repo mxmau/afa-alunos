@@ -7,7 +7,8 @@ Aplicativo web para montar uma ficha formativa do aluno sem foco em notas. Ele p
 - Cadastro manual de alunos.
 - Importação de DPFs em PDF com revisão antes de salvar.
 - Ficha rápida por aluno com perfil, pontos positivos, pontos de atenção, social, pedagógico, manter, melhorar e apoio da família.
-- Modelos rápidos para preencher a ficha em poucos passos.
+- Modelos rápidos e chips de frases prontas para preencher a ficha em poucos cliques.
+- Complemento próprio em cada campo da AFA para inserir palavras ou frases sem digitar o relatório inteiro.
 - Registros de ocorrências por aluno.
 - Dashboard com totais.
 - Exportação em CSV e backup JSON.

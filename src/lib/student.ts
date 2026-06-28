@@ -27,6 +27,8 @@ export function createStudent(data: Partial<ImportedStudent> & { name: string })
     alertLevel: "tranquilo",
     profile: { ...emptyProfile },
     incidents: [],
+    vistos: [],
+    vistosAuditLogs: [],
     createdAt: now,
     updatedAt: now,
   };

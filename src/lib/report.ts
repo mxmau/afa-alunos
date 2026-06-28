@@ -1,4 +1,5 @@
 import { Student } from "../types";
+import { generateVistoPedagogicalPhrase } from "./visto";
 
 export function buildFamilyBriefing(student: Student): string {
   const sections = [
@@ -17,10 +18,22 @@ export function buildFamilyBriefing(student: Student): string {
     .slice(0, 5)
     .map((incident) => `- ${formatDate(incident.date)}: ${incident.title}. ${incident.notes}`.trim());
 
+  const totalVistos = student.vistos?.length ?? 0;
+  const balance = student.vistos?.reduce((sum, v) => sum + v.value, 0) ?? 0;
+  const positiveVistos = student.vistos?.filter((v) => v.value > 0).length ?? 0;
+  const negativeVistos = student.vistos?.filter((v) => v.value < 0).length ?? 0;
+
+  let vistosSection = "";
+  if (totalVistos > 0) {
+    vistosSection = `Saldo: ${balance > 0 ? `+${balance}` : balance} visto(s) acumulado(s) (${positiveVistos} positivo(s), ${negativeVistos} negativo(s)).\n`;
+    vistosSection += generateVistoPedagogicalPhrase(student.vistos || []);
+  }
+
   return [
     `${student.name}${student.className ? ` - ${student.className}` : ""}`,
     "",
     ...sections.flatMap(([title, value]) => [`${title}:`, value, ""]),
+    vistosSection ? `Visto Virtual e Participação:\n${vistosSection}\n` : "",
     incidents.length ? "Registros recentes:" : "",
     ...incidents,
   ]

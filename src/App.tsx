@@ -40,6 +40,18 @@ import { getProfileCompletion, hasProfile, ProfileFilter } from "./lib/profile";
 import { appendPhrase, incidentPhraseBank, PhraseGroup, profilePhraseBank } from "./lib/quickPhrases";
 import { buildFamilyBriefing, formatDate } from "./lib/report";
 import {
+  buildNotasEditCsv,
+  buildNotasEditJson,
+  buildNotasEditRows,
+  createNotasEditSnapshot,
+  findNotasEditTargetClass,
+  findNotasEditTargetStudent,
+  filterVistosByPeriod,
+  getPeriodLabel,
+  parseNotasEditImport,
+} from "./lib/notasEdit";
+import { notasEditAuth, notasEditDb } from "./lib/notasEditFirebase";
+import {
   calculateStudentVistoMetrics,
   generateVistoIndicators,
   generateVistoPedagogicalPhrase,
@@ -68,6 +80,7 @@ import {
   AlertLevel,
   ImportedStudent,
   Incident,
+  NotasEditPeriod,
   Student,
   VirtualCheckEntry,
   VirtualCheckTemplate,
@@ -254,7 +267,9 @@ export default function App() {
 
   // For reports
   const [reportClass, setReportClass] = useState<string>("todas");
-  const [reportPeriod, setReportPeriod] = useState<"mes" | "bimestre" | "todo">("mes");
+  const [reportPeriod, setReportPeriod] = useState<NotasEditPeriod>("mes");
+  const [notasEditBimester, setNotasEditBimester] = useState<"b1" | "b2" | "b3" | "b4">("b1");
+  const [syncingNotasEdit, setSyncingNotasEdit] = useState(false);
   const [selectedReportSessionId, setSelectedReportSessionId] = useState<string>("");
   const [editingVistoId, setEditingVistoId] = useState<string | null>(null);
 
@@ -1255,6 +1270,198 @@ export default function App() {
       setMessage(`${restoredStudents.length} aluno(s) restaurados do backup (dados e configurações carregados).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não consegui restaurar esse backup.");
+    }
+  }
+
+  async function handleNotasEditImport(file: File | null) {
+    if (!file) return;
+
+    try {
+      const records = parseNotasEditImport(await file.text());
+      if (!records.length) throw new Error("NÃ£o encontrei notas vÃ¡lidas nesse arquivo.");
+
+      const rowsByStudentId = new Map(
+        buildNotasEditRows(students, { period: reportPeriod, classFilter: "todas" }).map((row) => [row.studentId, row]),
+      );
+      const now = new Date().toISOString();
+      const changed: Student[] = [];
+
+      const next = students.map((student) => {
+        const match = records.find((record) => {
+          if (record.registration && student.registration && normalizeKey(record.registration) === normalizeKey(student.registration)) {
+            return true;
+          }
+          return (
+            record.name &&
+            normalizeKey(record.name) === normalizeKey(student.name) &&
+            (!record.className || normalizeKey(record.className) === normalizeKey(student.className))
+          );
+        });
+
+        if (!match) return student;
+
+        const currentRow = rowsByStudentId.get(student.id);
+        const updated = touchStudent({
+          ...student,
+          notasEdit: {
+            behaviorScore: match.behaviorScore,
+            vistosScore: match.vistosScore,
+            period: match.period ?? reportPeriod,
+            completedVistos: currentRow?.completedVistos ?? 0,
+            expectedVistos: currentRow?.expectedVistos ?? 0,
+            syncedAt: now,
+            source: "notasedit-import",
+          },
+        });
+        changed.push(updated);
+        return updated;
+      });
+
+      if (!changed.length) {
+        setMessage("Arquivo lido, mas nenhum aluno bateu por matrÃ­cula ou nome/turma.");
+        return;
+      }
+
+      setStudents(next);
+      await saveStudentsLocalBatch(next);
+      await Promise.all(
+        changed.map((student) =>
+          queueOfflineOperation({
+            entityType: "student",
+            entityId: student.id,
+            operationType: "UPDATE",
+            payload: student,
+          }),
+        ),
+      );
+      if (cloudMode && user) triggerSync(user.uid);
+      setMessage(`${changed.length} nota(s) importada(s) do NotasEdit.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "NÃ£o consegui importar esse arquivo do NotasEdit.");
+    }
+  }
+
+  async function syncNotasEditDirect(rows = buildNotasEditRows(students, { period: reportPeriod, classFilter: reportClass })) {
+    if (!rows.length) {
+      setMessage("Não há alunos no filtro atual para sincronizar com o NotasEdit.");
+      return;
+    }
+
+    setSyncingNotasEdit(true);
+    setMessage("Conectando ao NotasEdit...");
+
+    try {
+      let notasUser = notasEditAuth.currentUser;
+      if (!notasUser) {
+        const provider = new GoogleAuthProvider();
+        const credential = await signInWithPopup(notasEditAuth, provider);
+        notasUser = credential.user;
+      }
+
+      const classesSnap = await getDocs(query(collection(notasEditDb, "classes"), where("ownerId", "==", notasUser.uid)));
+      const classes = classesSnap.docs.map((classDoc) => ({
+        id: classDoc.id,
+        name: String(classDoc.data().name ?? ""),
+        location: String(classDoc.data().location ?? ""),
+      }));
+
+      if (!classes.length) {
+        setMessage("Não encontrei turmas no NotasEdit para esse login.");
+        return;
+      }
+
+      const studentsByClass = new Map<string, Array<{ id: string; name?: string }>>();
+      for (const classInfo of classes) {
+        const studentsSnap = await getDocs(collection(notasEditDb, `classes/${classInfo.id}/students`));
+        studentsByClass.set(
+          classInfo.id,
+          studentsSnap.docs.map((studentDoc) => ({
+            id: studentDoc.id,
+            name: String(studentDoc.data().name ?? ""),
+          })),
+        );
+      }
+
+      const behaviorField = `${notasEditBimester}_comportamento`;
+      const vistosField = `${notasEditBimester}_vistos`;
+      const batches = [writeBatch(notasEditDb)];
+      let batchWrites = 0;
+      let synced = 0;
+      let classMisses = 0;
+      let studentMisses = 0;
+      const syncedSnapshots = new Map<string, ReturnType<typeof createNotasEditSnapshot>>();
+
+      const queueUpdate = (classId: string, studentId: string, row: (typeof rows)[number]) => {
+        if (batchWrites >= 450) {
+          batches.push(writeBatch(notasEditDb));
+          batchWrites = 0;
+        }
+        batches[batches.length - 1].update(doc(notasEditDb, `classes/${classId}/students`, studentId), {
+          [behaviorField]: row.behaviorScore,
+          [vistosField]: row.vistosScore,
+        });
+        batchWrites += 1;
+        synced += 1;
+        syncedSnapshots.set(row.studentId, createNotasEditSnapshot(row, "afa-calculado"));
+      };
+
+      for (const row of rows) {
+        const classInfo = findNotasEditTargetClass(row, classes);
+        if (!classInfo) {
+          classMisses += 1;
+          continue;
+        }
+
+        const studentInfo = findNotasEditTargetStudent(row, studentsByClass.get(classInfo.id) ?? []);
+        if (!studentInfo) {
+          studentMisses += 1;
+          continue;
+        }
+
+        queueUpdate(classInfo.id, studentInfo.id, row);
+      }
+
+      if (synced === 0) {
+        setMessage(`Nenhum aluno foi sincronizado. Turmas não encontradas: ${classMisses}; alunos não encontrados: ${studentMisses}.`);
+        return;
+      }
+
+      await Promise.all(batches.map((batch) => batch.commit()));
+
+      const nextStudents = students.map((student) => {
+        const snapshot = syncedSnapshots.get(student.id);
+        return snapshot ? touchStudent({ ...student, notasEdit: snapshot }) : student;
+      });
+      setStudents(nextStudents);
+      await saveStudentsLocalBatch(nextStudents);
+
+      const changedStudents = nextStudents.filter((student) => syncedSnapshots.has(student.id));
+      await Promise.all(
+        changedStudents.map((student) =>
+          queueOfflineOperation({
+            entityType: "student",
+            entityId: student.id,
+            operationType: "UPDATE",
+            payload: student,
+          }),
+        ),
+      );
+      if (cloudMode && user) triggerSync(user.uid);
+
+      setMessage(
+        `${synced} aluno(s) sincronizado(s) com o NotasEdit em ${notasEditBimester.toUpperCase()}. Turmas não encontradas: ${classMisses}; alunos não encontrados: ${studentMisses}.`,
+      );
+    } catch (error: any) {
+      const code = typeof error?.code === "string" ? error.code : "";
+      if (code.includes("unauthorized-domain")) {
+        setMessage("O domínio ainda não foi aceito pelo Firebase Auth do NotasEdit. Confira a lista de domínios autorizados.");
+      } else if (code.includes("permission-denied")) {
+        setMessage("O NotasEdit recusou a escrita. Publique as regras do Firestore com os campos comportamento e vistos liberados.");
+      } else {
+        setMessage(error instanceof Error ? `Erro ao sincronizar com o NotasEdit: ${error.message}` : "Erro ao sincronizar com o NotasEdit.");
+      }
+    } finally {
+      setSyncingNotasEdit(false);
     }
   }
 
@@ -3339,16 +3546,7 @@ export default function App() {
 
               const statsRows = repStudents.map((student) => {
                 const sv = student.vistos ?? [];
-                const now = new Date();
-                let filtered = sv;
-                if (reportPeriod === "mes") {
-                  const prefix = now.toISOString().slice(0, 7);
-                  filtered = sv.filter(v => v.date.startsWith(prefix));
-                } else if (reportPeriod === "bimestre") {
-                  const sixtyDaysAgo = new Date();
-                  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-                  filtered = sv.filter(v => new Date(v.date) >= sixtyDaysAgo);
-                }
+                const filtered = filterVistosByPeriod(sv, reportPeriod);
 
                 const totalValue = filtered.reduce((sum, v) => sum + v.value, 0);
                 const countPositive = filtered.filter(v => v.value > 0).length;
@@ -3395,6 +3593,17 @@ export default function App() {
                 }
                 return 0;
               });
+
+              const notasEditRows = buildNotasEditRows(students, {
+                period: reportPeriod,
+                classFilter: reportClassFilter,
+              });
+              const averageBehavior = notasEditRows.length
+                ? notasEditRows.reduce((sum, row) => sum + row.behaviorScore, 0) / notasEditRows.length
+                : 0;
+              const averageVistos = notasEditRows.length
+                ? notasEditRows.reduce((sum, row) => sum + row.vistosScore, 0) / notasEditRows.length
+                : 0;
 
               const selectedSession = classSessions.find(s => s.id === selectedReportSessionId) || classSessions[0];
               const whatsappText = selectedSession ? (() => {
@@ -3448,6 +3657,24 @@ export default function App() {
                 setMessage("Relatório exportado em CSV!");
               }
 
+              function exportNotasEditCSV() {
+                downloadFile(
+                  `notasedit-afa-${reportClass}-${reportPeriod}.csv`,
+                  buildNotasEditCsv(notasEditRows),
+                  "text/csv;charset=utf-8",
+                );
+                setMessage("Arquivo CSV do NotasEdit gerado.");
+              }
+
+              function exportNotasEditJSON() {
+                downloadFile(
+                  `notasedit-afa-${reportClass}-${reportPeriod}.json`,
+                  buildNotasEditJson(notasEditRows),
+                  "application/json",
+                );
+                setMessage("Arquivo JSON do NotasEdit gerado.");
+              }
+
               function copyLowParticipation() {
                 const lowList = sortedStatsRows
                   .filter(r => r.totalValue <= 0 || r.countNaoFez > 1 || r.countAusentes > 1)
@@ -3458,7 +3685,7 @@ export default function App() {
                   return;
                 }
                 
-                const copyText = `Alunos com baixa participação/problemas de vistos (${reportPeriod === "mes" ? "Mês Atual" : reportPeriod === "bimestre" ? "Bimestre" : "Todo o Período"}):\n\n` + lowList.join("\n");
+                const copyText = `Alunos com baixa participação/problemas de vistos (${getPeriodLabel(reportPeriod)}):\n\n` + lowList.join("\n");
                 navigator.clipboard.writeText(copyText)
                   .then(() => setMessage("Lista de alunos com baixa participação copiada para a área de transferência!"))
                   .catch(() => alert("Falha ao copiar lista."));
@@ -3484,6 +3711,7 @@ export default function App() {
                         <select id="rep-period" value={reportPeriod} onChange={(e) => setReportPeriod(e.target.value as any)}>
                           <option value="mes">Mês Atual</option>
                           <option value="bimestre">Bimestre (Últimos 60 dias)</option>
+                          <option value="semestre">Semestre Atual</option>
                           <option value="todo">Histórico Completo</option>
                         </select>
                       </div>
@@ -3571,6 +3799,92 @@ export default function App() {
                           </button>
                         </>
                       )}
+                    </div>
+                  </div>
+
+                  <div className="notasedit-card">
+                    <div className="report-table-header">
+                      <h3><Cloud size={16} /> NotasEdit</h3>
+                      <div className="notasedit-actions">
+                        <select
+                          aria-label="Bimestre no NotasEdit"
+                          className="notasedit-bimester-select"
+                          value={notasEditBimester}
+                          onChange={(event) => setNotasEditBimester(event.target.value as typeof notasEditBimester)}
+                        >
+                          <option value="b1">1º Bimestre</option>
+                          <option value="b2">2º Bimestre</option>
+                          <option value="b3">3º Bimestre</option>
+                          <option value="b4">4º Bimestre</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="primary compact-btn"
+                          onClick={() => syncNotasEditDirect(notasEditRows)}
+                          disabled={syncingNotasEdit}
+                        >
+                          <Cloud size={14} /> {syncingNotasEdit ? "Sincronizando..." : "Sincronizar"}
+                        </button>
+                        <button type="button" className="primary compact-btn" onClick={exportNotasEditCSV}>
+                          <Download size={14} /> CSV
+                        </button>
+                        <button type="button" className="ghost compact-btn" onClick={exportNotasEditJSON}>
+                          <FileText size={14} /> JSON
+                        </button>
+                        <label className="ghost compact-btn file-button">
+                          <Upload size={14} /> Importar
+                          <input
+                            type="file"
+                            accept=".csv,.json,application/json,text/csv"
+                            onChange={(event) => {
+                              handleNotasEditImport(event.currentTarget.files?.[0] ?? null);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="notasedit-summary">
+                      <div className="vistos-metric-card">
+                        <span>Alunos</span>
+                        <strong>{notasEditRows.length}</strong>
+                      </div>
+                      <div className="vistos-metric-card highlight">
+                        <span>Comportamento</span>
+                        <strong>{averageBehavior.toFixed(1)} / 2,0</strong>
+                      </div>
+                      <div className="vistos-metric-card highlight">
+                        <span>Vistos</span>
+                        <strong>{averageVistos.toFixed(1)} / 3,0</strong>
+                      </div>
+                    </div>
+
+                    <div className="table-responsive compact-preview">
+                      <table className="relatorio-vistos-table">
+                        <thead>
+                          <tr>
+                            <th>Aluno</th>
+                            <th>Turma</th>
+                            <th>Comp.</th>
+                            <th>Vistos</th>
+                            <th>Feitos</th>
+                            <th>Esperados</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {notasEditRows.slice(0, 8).map((row) => (
+                            <tr key={row.studentId}>
+                              <td><strong>{row.name}</strong></td>
+                              <td>{row.className || "Sem turma"}</td>
+                              <td>{row.behaviorScore.toFixed(1)}</td>
+                              <td>{row.vistosScore.toFixed(1)}</td>
+                              <td>{row.completedVistos}</td>
+                              <td>{row.expectedVistos}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
 
@@ -4063,4 +4377,12 @@ function downloadFile(name: string, content: string, type: string) {
   link.download = name;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function normalizeKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("pt-BR");
 }

@@ -54,6 +54,18 @@ export type VirtualCheckConfig = {
   allowDecimal: boolean;
 };
 
+export type NotasEditPeriod = "mes" | "bimestre" | "semestre" | "todo";
+
+export type NotasEditStudentGrades = {
+  behaviorScore: number;
+  vistosScore: number;
+  period: NotasEditPeriod;
+  completedVistos: number;
+  expectedVistos: number;
+  syncedAt: string;
+  source: "afa-calculado" | "notasedit-import";
+};
+
 export type VirtualCheckAuditLog = {
   id: string;
   entryId: string;
@@ -81,6 +93,7 @@ export type Student = {
   incidents: Incident[];
   vistos?: VirtualCheckEntry[];
   vistosAuditLogs?: VirtualCheckAuditLog[];
+  notasEdit?: NotasEditStudentGrades;
   createdAt: string;
   updatedAt: string;
 };
@@ -93,4 +106,3 @@ export type ImportedStudent = {
   status: string;
   source: string;
 };
-

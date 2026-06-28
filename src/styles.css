@@ -216,8 +216,12 @@ textarea:focus {
   display: grid;
   font-size: 0.84rem;
   gap: 4px;
+  line-height: 1.12;
   min-height: 54px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 8px 6px;
+  white-space: normal;
 }
 
 .page-tabs button.selected {
@@ -1655,14 +1659,14 @@ textarea:focus {
 }
 
 /* Individual seen manual forms */
-.quick-add-visto-form, .config-form-card, .template-form-card, .templates-list-card, .report-filters-card, .report-copy-card, .low-participation-card, .report-table-card {
+.quick-add-visto-form, .config-form-card, .template-form-card, .templates-list-card, .report-filters-card, .report-copy-card, .low-participation-card, .report-table-card, .notasedit-card {
   background: var(--paper);
   border: 1px solid var(--line);
   padding: 16px;
   border-radius: 4px;
 }
 
-.quick-add-visto-form h3, .vistos-list-container h3, .vistos-audit-log-container h3, .config-form-card h3, .template-form-card h3, .templates-list-card h3, .report-filters-card h3, .report-copy-card h3, .low-participation-card h3, .report-table-card h3 {
+.quick-add-visto-form h3, .vistos-list-container h3, .vistos-audit-log-container h3, .config-form-card h3, .template-form-card h3, .templates-list-card h3, .report-filters-card h3, .report-copy-card h3, .low-participation-card h3, .report-table-card h3, .notasedit-card h3 {
   margin-top: 0;
   margin-bottom: 12px;
   font-size: 0.98rem;
@@ -2080,6 +2084,7 @@ textarea:focus {
   }
   .page-tabs {
     font-size: 0.72rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .page-tabs button {
     min-height: 48px;
@@ -2302,6 +2307,56 @@ textarea:focus {
   min-height: 30px !important;
   padding: 4px 10px !important;
   font-size: 0.8rem !important;
+}
+
+.notasedit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.notasedit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.notasedit-bimester-select {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  min-height: 30px !important;
+  padding: 4px 10px !important;
+  font-size: 0.8rem !important;
+}
+
+.file-button input {
+  display: none;
+}
+
+.notasedit-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.compact-preview {
+  max-height: 260px;
+  overflow: auto;
 }
 
 /* Duplicate warning modal customized styling */
@@ -2625,5 +2680,3 @@ textarea:focus {
     justify-content: space-between;
   }
 }
-
-

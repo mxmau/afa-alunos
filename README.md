@@ -18,7 +18,7 @@ Aplicativo web para montar uma ficha formativa do aluno sem foco em notas. Ele p
 - Indicador de progresso da ficha com campos essenciais restantes.
 - Exportação em CSV compatível com acentos, backup JSON e restauração de backup.
 - CRUD de alunos com nome, turma, matrícula, unidade, status escolar e exclusão com confirmação.
-- Login/salvamento online via Supabase, quando configurado.
+- Login com Google e salvamento online via Firebase, quando configurado.
 - Modo local para testar sem banco.
 
 ## Rodar localmente
@@ -46,19 +46,24 @@ npm run build
 - Filtrar por turma, nível de atenção, ficha completa, ficha incompleta e sem ficha iniciada.
 - Rodar `npm test` e `npm run build` antes de publicar.
 
-## Configurar Supabase
+## Configurar Firebase
 
-1. Crie um projeto no Supabase.
-2. Execute o SQL de `supabase/schema.sql` no editor SQL do Supabase.
+1. Crie um projeto no Firebase.
+2. Ative Authentication com provedor Google.
+3. Ative o Firestore Database.
 3. Copie `.env.example` para `.env`.
 4. Preencha:
 
 ```bash
-VITE_SUPABASE_URL=https://seu-projeto.supabase.co
-VITE_SUPABASE_ANON_KEY=sua-chave-publica-anon
+VITE_FIREBASE_API_KEY=sua-api-key
+VITE_FIREBASE_AUTH_DOMAIN=seu-projeto.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=seu-projeto
+VITE_FIREBASE_STORAGE_BUCKET=seu-projeto.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=seu-remetente-id
+VITE_FIREBASE_APP_ID=seu-app-id
 ```
 
-No Supabase, habilite login por e-mail em Authentication. Depois de publicar no Netlify, adicione a URL do site nas URLs permitidas de autenticação.
+No Firebase Authentication, adicione o domínio do Netlify em domínios autorizados depois de publicar.
 
 ## Publicar no Netlify
 
@@ -67,7 +72,7 @@ O projeto já inclui `netlify.toml`.
 - Build command: `npm run build`
 - Publish directory: `dist`
 
-No Netlify, cadastre as mesmas variáveis `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`.
+No Netlify, cadastre as mesmas variáveis `VITE_FIREBASE_*` do arquivo `.env.example`.
 
 ## Próximos passos recomendados
 

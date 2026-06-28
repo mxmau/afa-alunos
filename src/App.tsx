@@ -117,9 +117,12 @@ type StudentRow = {
   data: Student;
 };
 
+type AppPage = "turmas" | "alunos" | "ficha";
+
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [page, setPage] = useState<AppPage>("turmas");
   const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("todas");
   const [campusFilter, setCampusFilter] = useState("todas");
@@ -127,8 +130,9 @@ export default function App() {
   const [profileFilter, setProfileFilter] = useState<ProfileFilter>("todos");
   const [hydrated, setHydrated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [localOnly, setLocalOnly] = useState(!db);
-  const [email, setEmail] = useState("");
+  const [localOnly, setLocalOnly] = useState(
+    !db || (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("local")),
+  );
   const [message, setMessage] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualClass, setManualClass] = useState("");
@@ -283,19 +287,79 @@ export default function App() {
   }, [students, hydrated, cloudMode, user]);
 
   const selectedStudent = students.find((student) => student.id === selectedId) ?? students[0];
-  const classes = useMemo(
-    () =>
-      [...new Set(students.map((student) => student.className).filter(Boolean))].sort((a, b) =>
-        a.localeCompare(b, "pt-BR"),
-      ),
-    [students],
-  );
   const campuses = useMemo(
     () =>
       [...new Set(students.map((student) => student.campus || "Não definido").filter(Boolean))].sort((a, b) =>
         a.localeCompare(b, "pt-BR"),
       ),
     [students],
+  );
+  const campusNavItems = useMemo(
+    () => [
+      { value: "todas", label: "Todas", count: students.length },
+      ...campuses.map((campus) => ({
+        value: campus,
+        label: campus,
+        count: students.filter((student) => (student.campus || "Não definido") === campus).length,
+      })),
+    ],
+    [campuses, students],
+  );
+  const classNavGroups = useMemo(() => {
+    const groupedCampuses = campusFilter === "todas" ? campuses : [campusFilter];
+
+    return groupedCampuses.map((campus) => {
+      const campusStudents = students.filter((student) => (student.campus || "Não definido") === campus);
+      const counts = new Map<string, number>();
+
+      for (const student of campusStudents) {
+        const className = student.className || "Sem turma";
+        counts.set(className, (counts.get(className) ?? 0) + 1);
+      }
+
+      const classItems = [...counts.entries()]
+        .sort(([a], [b]) => a.localeCompare(b, "pt-BR", { numeric: true }))
+        .map(([label, count]) => ({ value: label, label, count }));
+
+      return {
+        campus,
+        items:
+          campusFilter === "todas"
+            ? classItems
+            : [{ value: "todas", label: "Todas", count: campusStudents.length }, ...classItems],
+      };
+    });
+  }, [campusFilter, campuses, students]);
+
+  const classOverview = useMemo(
+    () =>
+      campuses.map((campus) => {
+        const campusStudents = students.filter((student) => (student.campus || "Não definido") === campus);
+        const classNames = [...new Set(campusStudents.map((student) => student.className || "Sem turma"))].sort(
+          (a, b) => a.localeCompare(b, "pt-BR", { numeric: true }),
+        );
+
+        return {
+          campus,
+          count: campusStudents.length,
+          classes: classNames.map((className) => {
+            const classStudents = campusStudents.filter((student) => (student.className || "Sem turma") === className);
+            const complete = classStudents.filter((student) => getProfileCompletion(student).isComplete).length;
+            const priority = classStudents.filter((student) => student.alertLevel === "prioridade").length;
+            const started = classStudents.filter((student) => hasProfile(student)).length;
+
+            return {
+              name: className,
+              count: classStudents.length,
+              complete,
+              priority,
+              started,
+              percentage: classStudents.length ? Math.round((complete / classStudents.length) * 100) : 0,
+            };
+          }),
+        };
+      }),
+    [campuses, students],
   );
 
   const importReviewCount = useMemo(
@@ -310,7 +374,8 @@ export default function App() {
         !normalized ||
         student.name.toLocaleLowerCase("pt-BR").includes(normalized) ||
         student.tags.some((tag) => tag.toLocaleLowerCase("pt-BR").includes(normalized));
-      const matchesClass = classFilter === "todas" || student.className === classFilter;
+      const studentClass = student.className || "Sem turma";
+      const matchesClass = classFilter === "todas" || studentClass === classFilter;
       const matchesCampus = campusFilter === "todas" || (student.campus || "Não definido") === campusFilter;
       const matchesAlert = alertFilter === "todos" || student.alertLevel === alertFilter;
       const studentHasProfile = hasProfile(student);
@@ -352,6 +417,9 @@ export default function App() {
     });
     setStudents((current) => [student, ...current]);
     setSelectedId(student.id);
+    setCampusFilter(student.campus || "Não definido");
+    setClassFilter(student.className || "todas");
+    setPage("ficha");
     setManualName("");
     setManualClass("");
   }
@@ -402,6 +470,11 @@ export default function App() {
 
     setStudents((current) => [...created, ...current].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
     setSelectedId(created[0]?.id || selectedId);
+    if (created[0]) {
+      setCampusFilter(created[0].campus || "Não definido");
+      setClassFilter(created[0].className || "todas");
+      setPage("alunos");
+    }
     setMessage(`${created.length} aluno(s) adicionados. Duplicados foram ignorados.`);
     setImportPreview([]);
   }
@@ -418,6 +491,31 @@ export default function App() {
 
   function removeImportPreview(index: number) {
     setImportPreview((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }
+
+  function selectCohort(campus: string, className = "todas") {
+    setCampusFilter(campus);
+    setClassFilter(className);
+    setPage("alunos");
+
+    const nextStudent = students.find((student) => {
+      const studentCampus = student.campus || "Não definido";
+      const studentClass = student.className || "Sem turma";
+      return studentCampus === campus && (className === "todas" || studentClass === className);
+    });
+
+    if (nextStudent) setSelectedId(nextStudent.id);
+  }
+
+  function showAllClasses() {
+    setCampusFilter("todas");
+    setClassFilter("todas");
+    setPage("turmas");
+  }
+
+  function openStudent(id: string) {
+    setSelectedId(id);
+    setPage("ficha");
   }
 
   function applyQuickProfile(template: (typeof quickProfiles)[number]) {
@@ -548,8 +646,26 @@ export default function App() {
 
   const familyBriefing = selectedStudent ? buildFamilyBriefing(selectedStudent) : "";
   const selectedCompletion = selectedStudent ? getProfileCompletion(selectedStudent) : null;
+  const pageTitle =
+    page === "turmas"
+      ? "Turmas"
+      : page === "alunos"
+        ? classFilter === "todas"
+          ? "Alunos"
+          : `Turma ${classFilter}`
+        : "Ficha do aluno";
+  const pageSubtitle =
+    page === "turmas"
+      ? "Escolha uma unidade e uma turma antes de abrir as fichas."
+      : page === "alunos"
+        ? `${campusFilter === "todas" ? "Todas as unidades" : campusFilter} · ${
+            classFilter === "todas" ? "todas as turmas" : classFilter
+          }`
+        : selectedStudent
+          ? `${selectedStudent.campus || "Não definido"} · ${selectedStudent.className || "Sem turma"}`
+          : "Abra um aluno para montar a ficha.";
 
-  if (!user) {
+  if (!user && !localOnly) {
     return (
       <main className="login-screen">
         <div className="login-card animate-fade-in">
@@ -568,6 +684,9 @@ export default function App() {
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
               </svg>
               Entrar com o Google
+            </button>
+            <button className="local-login-btn" onClick={() => setLocalOnly(true)}>
+              Usar modo local
             </button>
           </div>
           
@@ -600,18 +719,19 @@ export default function App() {
                   <X size={16} />
                 </button>
               </>
-            ) : (
-              <div className="login-form">
-                <input
-                  aria-label="E-mail para login"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="seu e-mail"
-                  type="email"
-                />
+            ) : localOnly ? (
+              <>
+                <span>Modo local ativo</span>
                 <button onClick={login}>
                   <LogIn size={16} />
-                  Entrar
+                  Entrar online
+                </button>
+              </>
+            ) : (
+              <div className="login-form">
+                <button onClick={login}>
+                  <LogIn size={16} />
+                  Entrar com Google
                 </button>
                 <button className="ghost" onClick={() => setLocalOnly(true)}>
                   Usar local
@@ -663,6 +783,28 @@ export default function App() {
           </button>
         </div>
 
+        <nav className="page-tabs" aria-label="Navegação principal">
+          <button className={page === "turmas" ? "selected" : ""} type="button" onClick={showAllClasses}>
+            <LayoutDashboard size={16} />
+            Turmas
+          </button>
+          <button className={page === "alunos" ? "selected" : ""} type="button" onClick={() => setPage("alunos")}>
+            <Users size={16} />
+            Alunos
+          </button>
+          <button
+            className={page === "ficha" ? "selected" : ""}
+            disabled={!selectedStudent}
+            type="button"
+            onClick={() => selectedStudent && setPage("ficha")}
+          >
+            <ClipboardList size={16} />
+            Ficha
+          </button>
+        </nav>
+
+        {page === "alunos" && (
+          <>
         <div className="search-box">
           <Search size={16} />
           <input
@@ -673,36 +815,57 @@ export default function App() {
           />
         </div>
 
-        <div className="filter-row">
-          <Filter size={16} />
-          <select
-            aria-label="Filtrar por turma"
-            value={classFilter}
-            onChange={(event) => setClassFilter(event.target.value)}
-          >
-            <option value="todas">Todas as turmas</option>
-            {classes.map((className) => (
-              <option key={className} value={className}>
-                {className}
-              </option>
+        <div className="student-navigation">
+          <div className="nav-label">
+            <Cloud size={16} />
+            <span>Unidades</span>
+          </div>
+          <div className="campus-tabs" role="tablist" aria-label="Filtrar por unidade">
+            {campusNavItems.map((item) => (
+              <button
+                className={campusFilter === item.value ? "selected" : ""}
+                key={item.value}
+                onClick={() => {
+                  if (item.value === "todas") {
+                    setCampusFilter("todas");
+                    setClassFilter("todas");
+                    setPage("alunos");
+                    return;
+                  }
+                  selectCohort(item.value);
+                }}
+                type="button"
+              >
+                <span>{item.label}</span>
+                <strong>{item.count}</strong>
+              </button>
             ))}
-          </select>
-        </div>
+          </div>
 
-        <div className="filter-row">
-          <Cloud size={16} />
-          <select
-            aria-label="Filtrar por unidade"
-            value={campusFilter}
-            onChange={(event) => setCampusFilter(event.target.value)}
-          >
-            <option value="todas">Todas as unidades</option>
-            {campuses.map((campus) => (
-              <option key={campus} value={campus}>
-                {campus}
-              </option>
+          <div className="nav-label">
+            <Filter size={16} />
+            <span>Turmas</span>
+          </div>
+          <div className="class-groups" aria-label="Filtrar por turma">
+            {classNavGroups.map((group) => (
+              <div className="class-group" key={group.campus}>
+                {campusFilter === "todas" && <strong>{group.campus}</strong>}
+                <div className="class-grid">
+                  {group.items.map((item) => (
+                    <button
+                      className={campusFilter === group.campus && classFilter === item.value ? "selected" : ""}
+                      key={`${group.campus}-${item.value}`}
+                      onClick={() => selectCohort(group.campus, item.value)}
+                      type="button"
+                    >
+                      <span>{item.label}</span>
+                      <strong>{item.count}</strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
-          </select>
+          </div>
         </div>
 
         <div className="filter-row">
@@ -736,37 +899,29 @@ export default function App() {
           </select>
         </div>
 
-        <div className="student-list">
-          {filteredStudents.map((student) => (
-            <button
-              className={`student-item ${student.id === selectedStudent?.id ? "active" : ""}`}
-              key={student.id}
-              onClick={() => setSelectedId(student.id)}
-            >
-              <span className={`status-dot ${student.alertLevel}`} />
-              <span>
-                <strong>{student.name}</strong>
-                <small>
-                  {student.className || "Sem turma"} · {student.campus || "Não definido"} ·{" "}
-                  {getProfileCompletion(student).percentage}% da ficha
-                </small>
-              </span>
+          </>
+        )}
+
+        {page === "ficha" && selectedStudent && (
+          <div className="current-student-card">
+            <span>Ficha aberta</span>
+            <strong>{selectedStudent.name}</strong>
+            <small>
+              {selectedStudent.campus || "Não definido"} · {selectedStudent.className || "Sem turma"}
+            </small>
+            <button type="button" onClick={() => setPage("alunos")}>
+              <Users size={16} />
+              Ver alunos da turma
             </button>
-          ))}
-          {students.length > 0 && filteredStudents.length === 0 && (
-            <div className="empty-list">
-              <strong>Nenhum aluno encontrado</strong>
-              <span>Ajuste a busca ou os filtros para ver outros alunos.</span>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <div>
-            <h1>Panorama do aluno</h1>
-            <p>Ficha rápida para reuniões, atendimentos e acompanhamento formativo.</p>
+            <h1>{pageTitle}</h1>
+            <p>{pageSubtitle}</p>
           </div>
           <div className="actions">
             <button onClick={exportCsv}>
@@ -800,6 +955,8 @@ export default function App() {
           </div>
         )}
 
+        {page === "turmas" && (
+          <>
         <section className="metrics">
           <Metric icon={<Users size={19} />} label="Alunos" value={students.length} />
           <Metric icon={<LayoutDashboard size={19} />} label="Iniciadas" value={stats.withRecords} />
@@ -808,7 +965,148 @@ export default function App() {
           <Metric icon={<BookOpen size={19} />} label="Registros" value={stats.incidents} />
         </section>
 
-        {selectedStudent ? (
+        <section className="unit-board" aria-label="Navegação por unidade e turma">
+          <div className="section-heading">
+            <div>
+              <span>Entrada por turma</span>
+              <h2>Escolha a unidade e abra uma turma</h2>
+            </div>
+            <button
+              className="ghost"
+              type="button"
+              onClick={() => {
+                setCampusFilter("todas");
+                setClassFilter("todas");
+              }}
+            >
+              Ver todos
+            </button>
+          </div>
+
+          {students.length === 0 ? (
+            <section className="empty-state empty-state-compact">
+              <Users size={32} />
+              <h2>Nenhum aluno cadastrado ainda.</h2>
+              <p>Importe PDFs ou cadastre um aluno manualmente para visualizar as turmas.</p>
+            </section>
+          ) : (
+            <div className="unit-columns">
+              {classOverview.map((group) => (
+                <article
+                  className={`unit-column ${campusFilter === group.campus ? "active" : ""}`}
+                  key={group.campus}
+                >
+                  <div className="unit-column-header">
+                    <div>
+                      <strong>{group.campus}</strong>
+                      <span>{group.count} alunos</span>
+                    </div>
+                    <button type="button" onClick={() => selectCohort(group.campus)}>
+                      Abrir unidade
+                    </button>
+                  </div>
+
+                  <div className="cohort-list">
+                    {group.classes.map((classItem) => (
+                      <button
+                        className={
+                          campusFilter === group.campus && classFilter === classItem.name
+                            ? "cohort-card selected"
+                            : "cohort-card"
+                        }
+                        key={`${group.campus}-${classItem.name}`}
+                        onClick={() => selectCohort(group.campus, classItem.name)}
+                        type="button"
+                      >
+                        <span>
+                          <strong>{classItem.name}</strong>
+                          <small>{classItem.count} alunos</small>
+                        </span>
+                        <span className="cohort-progress">
+                          <span>{classItem.complete} completas</span>
+                          <span className="mini-progress" aria-label={`${classItem.percentage}% da turma completa`}>
+                            <span style={{ width: `${classItem.percentage}%` }} />
+                          </span>
+                        </span>
+                        <span className="cohort-meta">
+                          <small>{classItem.started} iniciadas</small>
+                          {classItem.priority > 0 && <small>{classItem.priority} prioridade</small>}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+          </>
+        )}
+
+        {page === "alunos" && (
+          <section className="panel directory-panel">
+            <div className="section-heading">
+              <div>
+                <span>{campusFilter === "todas" ? "Todas as unidades" : campusFilter}</span>
+                <h2>{classFilter === "todas" ? "Alunos" : `Turma ${classFilter}`}</h2>
+              </div>
+              <button type="button" onClick={showAllClasses}>
+                <LayoutDashboard size={16} />
+                Voltar para turmas
+              </button>
+            </div>
+
+            <div className="student-list-header page-list-header">
+              <strong>{filteredStudents.length} aluno(s)</strong>
+              <span>{students.length ? `${students.length} no total` : "Importe PDFs para começar"}</span>
+            </div>
+
+            <div className="student-list directory-list">
+              {filteredStudents.map((student) => {
+                const completion = getProfileCompletion(student);
+
+                return (
+                  <button
+                    className={`student-item ${student.id === selectedStudent?.id ? "active" : ""}`}
+                    key={student.id}
+                    onClick={() => openStudent(student.id)}
+                    type="button"
+                  >
+                    <span className={`status-dot ${student.alertLevel}`} />
+                    <span className="student-card-body">
+                      <span className="student-card-header">
+                        <strong>{student.name}</strong>
+                        <span>{completion.percentage}%</span>
+                      </span>
+                      <span className="student-card-meta">
+                        <span>{student.className || "Sem turma"}</span>
+                        <span>{student.campus || "Não definido"}</span>
+                        <span>{alertLabels[student.alertLevel]}</span>
+                      </span>
+                      <span className="mini-progress" aria-label={`Ficha ${completion.percentage}% completa`}>
+                        <span style={{ width: `${completion.percentage}%` }} />
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              {students.length > 0 && filteredStudents.length === 0 && (
+                <div className="empty-list">
+                  <strong>Nenhum aluno encontrado</strong>
+                  <span>Ajuste a busca ou os filtros para ver outros alunos.</span>
+                </div>
+              )}
+              {students.length === 0 && (
+                <div className="empty-list">
+                  <strong>Nenhum aluno cadastrado</strong>
+                  <span>Importe PDFs ou use o cadastro manual para começar.</span>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {page === "ficha" && (selectedStudent ? (
           <div className="student-grid">
             <section className="panel main-panel">
               <div className="student-header">
@@ -1060,7 +1358,7 @@ export default function App() {
             <h2>Comece importando PDFs ou cadastrando um aluno.</h2>
             <p>Depois disso, cada aluno aparece na lista lateral para montar a ficha em poucos passos.</p>
           </section>
-        )}
+        ))}
       </section>
 
       {importPreview.length > 0 && (

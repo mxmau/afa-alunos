@@ -163,6 +163,16 @@ const incidentLabels: Record<Incident["type"], string> = {
 };
 
 type AppPage = "turmas" | "alunos" | "ficha" | "vistos" | "sync";
+type QueueMode = "filtro-atual" | "sem-ficha" | "incompleta" | "prioridade" | "sem-vistos" | "nao-sincronizados";
+type NotasEditPreviewRow = {
+  studentId: string;
+  name: string;
+  className: string;
+  behaviorScore: number;
+  vistosScore: number;
+  status: "ok" | "turma" | "aluno";
+  detail: string;
+};
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
@@ -270,8 +280,31 @@ export default function App() {
   const [reportPeriod, setReportPeriod] = useState<NotasEditPeriod>("mes");
   const [notasEditBimester, setNotasEditBimester] = useState<"b1" | "b2" | "b3" | "b4">("b1");
   const [syncingNotasEdit, setSyncingNotasEdit] = useState(false);
+  const [previewingNotasEdit, setPreviewingNotasEdit] = useState(false);
+  const [notasEditPreviewRows, setNotasEditPreviewRows] = useState<NotasEditPreviewRow[]>([]);
+  const [classPairDraft, setClassPairDraft] = useState({ afa: "", notas: "" });
+  const [studentPairDraft, setStudentPairDraft] = useState({ afa: "", notas: "" });
+  const [notasEditClassPairs, setNotasEditClassPairs] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("afa-notasedit-class-pairs:v1") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const [notasEditStudentPairs, setNotasEditStudentPairs] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("afa-notasedit-student-pairs:v1") || "{}");
+    } catch {
+      return {};
+    }
+  });
   const [selectedReportSessionId, setSelectedReportSessionId] = useState<string>("");
   const [editingVistoId, setEditingVistoId] = useState<string | null>(null);
+  const [queueMode, setQueueMode] = useState<QueueMode>("filtro-atual");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [quickIncidentOpen, setQuickIncidentOpen] = useState(false);
+  const [quickIncidentStudentId, setQuickIncidentStudentId] = useState("");
 
   // Checkbox selection of students in Lançamento
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -327,6 +360,29 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("afa-vistos-templates:v1", JSON.stringify(vistosTemplates));
   }, [vistosTemplates]);
+
+  useEffect(() => {
+    localStorage.setItem("afa-notasedit-class-pairs:v1", JSON.stringify(notasEditClassPairs));
+  }, [notasEditClassPairs]);
+
+  useEffect(() => {
+    localStorage.setItem("afa-notasedit-student-pairs:v1", JSON.stringify(notasEditStudentPairs));
+  }, [notasEditStudentPairs]);
+
+  useEffect(() => {
+    function handleCommandShortcut(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT";
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase("pt-BR") === "k") {
+        event.preventDefault();
+        setCommandOpen(true);
+        if (!isTyping) setCommandQuery("");
+      }
+    }
+
+    window.addEventListener("keydown", handleCommandShortcut);
+    return () => window.removeEventListener("keydown", handleCommandShortcut);
+  }, []);
 
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -1144,6 +1200,87 @@ export default function App() {
     });
   }, [students, searchQuery, classFilter, campusFilter, alertFilter, profileFilter]);
 
+  const studentQueue = useMemo(() => {
+    const base = queueMode === "filtro-atual" ? filteredStudents : students;
+    return base.filter((student) => {
+      const completion = getProfileCompletion(student);
+      if (queueMode === "sem-ficha") return !hasProfile(student);
+      if (queueMode === "incompleta") return !completion.isComplete;
+      if (queueMode === "prioridade") return student.alertLevel === "prioridade";
+      if (queueMode === "sem-vistos") return (student.vistos?.length ?? 0) === 0;
+      if (queueMode === "nao-sincronizados") return !student.notasEdit;
+      return true;
+    });
+  }, [filteredStudents, queueMode, students]);
+
+  const queueIndex = selectedStudent ? studentQueue.findIndex((student) => student.id === selectedStudent.id) : -1;
+
+  const pendingDashboard = useMemo(() => {
+    const withoutProfile = students.filter((student) => !hasProfile(student));
+    const incomplete = students.filter((student) => !getProfileCompletion(student).isComplete);
+    const withoutVistos = students.filter((student) => (student.vistos?.length ?? 0) === 0);
+    const notSynced = students.filter((student) => !student.notasEdit);
+    const lowBehavior = buildNotasEditRows(students, { period: "semestre" }).filter((row) => row.behaviorScore < 1.2);
+    return { withoutProfile, incomplete, withoutVistos, notSynced, lowBehavior };
+  }, [students]);
+
+  const selectedNotasEditRow = useMemo(
+    () =>
+      selectedStudent
+        ? buildNotasEditRows(students, { period: reportPeriod, classFilter: selectedStudent.className || "todas" }).find(
+            (row) => row.studentId === selectedStudent.id,
+          ) ?? null
+        : null,
+    [reportPeriod, selectedStudent, students],
+  );
+
+  const selectedEvolution = useMemo(() => {
+    if (!selectedStudent) return null;
+    const vistos = selectedStudent.vistos ?? [];
+    const monthVistos = filterVistosByPeriod(vistos, "mes");
+    const bimesterVistos = filterVistosByPeriod(vistos, "bimestre");
+    const monthBalance = monthVistos.reduce((sum, visto) => sum + visto.value, 0);
+    const bimesterBalance = bimesterVistos.reduce((sum, visto) => sum + visto.value, 0);
+    const recentIncidents = selectedStudent.incidents.filter((incident) => {
+      const date = new Date(`${incident.date}T00:00:00.000Z`);
+      const limit = new Date();
+      limit.setDate(limit.getDate() - 30);
+      return date >= limit;
+    });
+    const attentionCount = recentIncidents.filter((incident) => incident.type !== "positivo").length;
+    const trend =
+      monthBalance > 0 && attentionCount === 0
+        ? "melhorando"
+        : attentionCount >= 2 || monthBalance < 0
+          ? "atenção"
+          : "estável";
+    return { monthBalance, bimesterBalance, recentIncidents: recentIncidents.length, attentionCount, trend };
+  }, [selectedStudent]);
+
+  const commandItems = useMemo(() => {
+    const normalized = commandQuery.trim().toLocaleLowerCase("pt-BR");
+    const studentItems = students
+      .filter((student) => !normalized || student.name.toLocaleLowerCase("pt-BR").includes(normalized))
+      .slice(0, 8)
+      .map((student) => ({
+        key: `student-${student.id}`,
+        label: student.name,
+        meta: `${student.className || "Sem turma"} · ${student.campus || "Não definido"}`,
+        run: () => openStudent(student.id),
+      }));
+
+    const actionItems = [
+      { key: "action-vistos", label: "Abrir lançamento de vistos", meta: "Vistos", run: () => setPage("vistos") },
+      ...(students.length > 0
+        ? [{ key: "action-quick", label: "Registrar ocorrência rápida", meta: "Ficha", run: () => openQuickIncident(selectedStudent?.id) }]
+        : []),
+      { key: "action-notasedit", label: "Abrir relatório NotasEdit", meta: "Sincronização", run: () => { setPage("vistos"); setVistosSubPage("relatorios"); } },
+      { key: "action-pending", label: "Ver painel de pendências", meta: "Turmas", run: () => setPage("turmas") },
+    ].filter((item) => !normalized || item.label.toLocaleLowerCase("pt-BR").includes(normalized));
+
+    return [...actionItems, ...studentItems].slice(0, 12);
+  }, [commandQuery, selectedStudent?.id, students]);
+
   const stats = useMemo(() => {
     const withRecords = students.filter((student) => hasProfile(student)).length;
     const complete = students.filter((student) => getProfileCompletion(student).isComplete).length;
@@ -1406,13 +1543,18 @@ export default function App() {
       };
 
       for (const row of rows) {
-        const classInfo = findNotasEditTargetClass(row, classes);
+        const pairedRow = {
+          ...row,
+          className: notasEditClassPairs[row.className] || row.className,
+          name: notasEditStudentPairs[row.name] || row.name,
+        };
+        const classInfo = findNotasEditTargetClass(pairedRow, classes);
         if (!classInfo) {
           classMisses += 1;
           continue;
         }
 
-        const studentInfo = findNotasEditTargetStudent(row, studentsByClass.get(classInfo.id) ?? []);
+        const studentInfo = findNotasEditTargetStudent(pairedRow, studentsByClass.get(classInfo.id) ?? []);
         if (!studentInfo) {
           studentMisses += 1;
           continue;
@@ -1462,6 +1604,69 @@ export default function App() {
       }
     } finally {
       setSyncingNotasEdit(false);
+    }
+  }
+
+  async function previewNotasEditDirect(rows = buildNotasEditRows(students, { period: reportPeriod, classFilter: reportClass })) {
+    if (!rows.length) {
+      setMessage("Não há alunos no filtro atual para pré-visualizar.");
+      return;
+    }
+
+    setPreviewingNotasEdit(true);
+    setMessage("Gerando prévia do NotasEdit...");
+
+    try {
+      let notasUser = notasEditAuth.currentUser;
+      if (!notasUser) {
+        const provider = new GoogleAuthProvider();
+        const credential = await signInWithPopup(notasEditAuth, provider);
+        notasUser = credential.user;
+      }
+
+      const classesSnap = await getDocs(query(collection(notasEditDb, "classes"), where("ownerId", "==", notasUser.uid)));
+      const classes = classesSnap.docs.map((classDoc) => ({
+        id: classDoc.id,
+        name: String(classDoc.data().name ?? ""),
+        location: String(classDoc.data().location ?? ""),
+      }));
+
+      const studentsByClass = new Map<string, Array<{ id: string; name?: string }>>();
+      for (const classInfo of classes) {
+        const studentsSnap = await getDocs(collection(notasEditDb, `classes/${classInfo.id}/students`));
+        studentsByClass.set(
+          classInfo.id,
+          studentsSnap.docs.map((studentDoc) => ({
+            id: studentDoc.id,
+            name: String(studentDoc.data().name ?? ""),
+          })),
+        );
+      }
+
+      const previewRows: NotasEditPreviewRow[] = rows.map((row) => {
+        const pairedRow = {
+          ...row,
+          className: notasEditClassPairs[row.className] || row.className,
+          name: notasEditStudentPairs[row.name] || row.name,
+        };
+        const classInfo = findNotasEditTargetClass(pairedRow, classes);
+        if (!classInfo) {
+          return { ...row, status: "turma", detail: "Turma não encontrada no NotasEdit" };
+        }
+        const studentInfo = findNotasEditTargetStudent(pairedRow, studentsByClass.get(classInfo.id) ?? []);
+        if (!studentInfo) {
+          return { ...row, status: "aluno", detail: `Aluno não encontrado em ${classInfo.name}` };
+        }
+        return { ...row, status: "ok", detail: `${classInfo.name} · ${studentInfo.name}` };
+      });
+
+      setNotasEditPreviewRows(previewRows);
+      const ok = previewRows.filter((row) => row.status === "ok").length;
+      setMessage(`Prévia pronta: ${ok}/${previewRows.length} aluno(s) prontos para sincronizar.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Erro na prévia do NotasEdit: ${error.message}` : "Erro na prévia do NotasEdit.");
+    } finally {
+      setPreviewingNotasEdit(false);
     }
   }
 
@@ -1516,6 +1721,68 @@ export default function App() {
   function openStudent(id: string) {
     setSelectedId(id);
     setPage("ficha");
+  }
+
+  function openQueueOffset(offset: number) {
+    if (!studentQueue.length) return;
+    const current = queueIndex >= 0 ? queueIndex : 0;
+    const nextIndex = Math.min(studentQueue.length - 1, Math.max(0, current + offset));
+    openStudent(studentQueue[nextIndex].id);
+  }
+
+  function saveAndNext() {
+    if (queueIndex < 0 || queueIndex >= studentQueue.length - 1) {
+      setMessage("Fim da fila atual.");
+      return;
+    }
+    openStudent(studentQueue[queueIndex + 1].id);
+  }
+
+  function applyQuickProfileAndNext(template: (typeof quickProfiles)[number]) {
+    applyQuickProfile(template);
+    window.setTimeout(saveAndNext, 0);
+  }
+
+  function openQuickIncident(studentId = selectedStudent?.id) {
+    if (studentId) setQuickIncidentStudentId(studentId);
+    setQuickIncidentOpen(true);
+    setCommandOpen(false);
+  }
+
+  function addQuickIncident(title: string, type: Incident["type"] = "observacao", notes = "") {
+    const studentId = quickIncidentOpen ? quickIncidentStudentId || selectedStudent?.id : selectedStudent?.id;
+    if (!studentId) return;
+    const incident: Incident = {
+      id: crypto.randomUUID(),
+      date: new Date().toISOString().slice(0, 10),
+      type,
+      title,
+      notes,
+    };
+    updateStudent(studentId, (student) => ({
+      ...student,
+      incidents: [incident, ...student.incidents],
+    }));
+    setQuickIncidentOpen(false);
+    setMessage("Ocorrência rápida registrada.");
+  }
+
+  function addClassPair() {
+    if (!classPairDraft.afa.trim() || !classPairDraft.notas.trim()) return;
+    setNotasEditClassPairs((current) => ({
+      ...current,
+      [classPairDraft.afa.trim()]: classPairDraft.notas.trim(),
+    }));
+    setClassPairDraft({ afa: "", notas: "" });
+  }
+
+  function addStudentPair() {
+    if (!studentPairDraft.afa.trim() || !studentPairDraft.notas.trim()) return;
+    setNotasEditStudentPairs((current) => ({
+      ...current,
+      [studentPairDraft.afa.trim()]: studentPairDraft.notas.trim(),
+    }));
+    setStudentPairDraft({ afa: "", notas: "" });
   }
 
   function applyQuickProfile(template: (typeof quickProfiles)[number]) {
@@ -2056,6 +2323,34 @@ export default function App() {
               <Users size={16} />
               Ver alunos da turma
             </button>
+            <div className="queue-controls">
+              <label>
+                Fila
+                <select
+                  aria-label="Fila de trabalho"
+                  value={queueMode}
+                  onChange={(event) => setQueueMode(event.target.value as QueueMode)}
+                >
+                  <option value="filtro-atual">Filtro atual</option>
+                  <option value="sem-ficha">Sem ficha</option>
+                  <option value="incompleta">Incompletas</option>
+                  <option value="prioridade">Prioridade</option>
+                  <option value="sem-vistos">Sem vistos</option>
+                  <option value="nao-sincronizados">Nao sincronizados</option>
+                </select>
+              </label>
+              <span>
+                {queueIndex >= 0 ? `${queueIndex + 1}/${studentQueue.length}` : `0/${studentQueue.length}`}
+              </span>
+            </div>
+            <div className="queue-actions">
+              <button type="button" onClick={() => openQueueOffset(-1)} disabled={queueIndex <= 0}>
+                Anterior
+              </button>
+              <button type="button" onClick={saveAndNext} disabled={queueIndex < 0 || queueIndex >= studentQueue.length - 1}>
+                Salvar e proximo
+              </button>
+            </div>
           </div>
         )}
       </aside>
@@ -2067,6 +2362,14 @@ export default function App() {
             <p>{pageSubtitle}</p>
           </div>
           <div className="actions">
+            <button type="button" className="ghost" onClick={() => setCommandOpen(true)}>
+              <Search size={16} />
+              Ctrl+K
+            </button>
+            <button type="button" className="ghost" onClick={() => openQuickIncident(selectedStudent?.id)} disabled={students.length === 0}>
+              <PlusCircle size={16} />
+              Ocorrencia
+            </button>
             <button onClick={exportCsv}>
               <Download size={16} />
               CSV
@@ -2109,6 +2412,72 @@ export default function App() {
         </section>
 
         <section className="unit-board" aria-label="Navegação por unidade e turma">
+          <section className="pending-grid" aria-label="Painel de pendencias">
+            <button
+              type="button"
+              className="pending-card"
+              onClick={() => {
+                setProfileFilter("sem-ficha");
+                setQueueMode("sem-ficha");
+                setPage("alunos");
+              }}
+            >
+              <span>Sem ficha</span>
+              <strong>{pendingDashboard.withoutProfile.length}</strong>
+              <small>Abrir fila de alunos ainda sem panorama.</small>
+            </button>
+            <button
+              type="button"
+              className="pending-card"
+              onClick={() => {
+                setProfileFilter("incompleta");
+                setQueueMode("incompleta");
+                setPage("alunos");
+              }}
+            >
+              <span>Incompletas</span>
+              <strong>{pendingDashboard.incomplete.length}</strong>
+              <small>Priorizar fichas com campos essenciais pendentes.</small>
+            </button>
+            <button
+              type="button"
+              className="pending-card"
+              onClick={() => {
+                setQueueMode("sem-vistos");
+                setPage("alunos");
+              }}
+            >
+              <span>Sem vistos</span>
+              <strong>{pendingDashboard.withoutVistos.length}</strong>
+              <small>Conferir alunos sem registro de vistos.</small>
+            </button>
+            <button
+              type="button"
+              className="pending-card"
+              onClick={() => {
+                setQueueMode("nao-sincronizados");
+                setPage("alunos");
+              }}
+            >
+              <span>Nao sincronizados</span>
+              <strong>{pendingDashboard.notSynced.length}</strong>
+              <small>Preparar envio para o NotasEdit.</small>
+            </button>
+            <button
+              type="button"
+              className="pending-card"
+              onClick={() => {
+                setAlertFilter("prioridade");
+                setQueueMode("prioridade");
+                setPage("alunos");
+              }}
+            >
+              <span>Baixo comportamento</span>
+              <strong>{pendingDashboard.lowBehavior.length}</strong>
+              <small>Revisar alunos abaixo de 1,2 no semestre.</small>
+            </button>
+          </section>
+
           <div className="section-heading">
             <div>
               <span>Entrada por turma</span>
@@ -2319,6 +2688,44 @@ export default function App() {
                 )}
               </div>
 
+              <section className="student-360-grid" aria-label="Visao geral do aluno">
+                <div className="student-360-card">
+                  <span>Comportamento</span>
+                  <strong>{selectedNotasEditRow ? selectedNotasEditRow.behaviorScore.toFixed(1) : "0.0"} / 2,0</strong>
+                  <small>{getPeriodLabel(reportPeriod)}</small>
+                </div>
+                <div className="student-360-card">
+                  <span>Vistos</span>
+                  <strong>{selectedNotasEditRow ? selectedNotasEditRow.vistosScore.toFixed(1) : "0.0"} / 3,0</strong>
+                  <small>
+                    {selectedNotasEditRow
+                      ? `${selectedNotasEditRow.completedVistos}/${selectedNotasEditRow.expectedVistos} feitos`
+                      : "Sem base no periodo"}
+                  </small>
+                </div>
+                <div className="student-360-card">
+                  <span>Tendencia</span>
+                  <strong>{selectedEvolution?.trend ?? "estavel"}</strong>
+                  <small>
+                    Mes {selectedEvolution?.monthBalance ?? 0} · bimestre {selectedEvolution?.bimesterBalance ?? 0}
+                  </small>
+                </div>
+                <div className="student-360-card">
+                  <span>Ultimos 30 dias</span>
+                  <strong>{selectedEvolution?.recentIncidents ?? 0}</strong>
+                  <small>{selectedEvolution?.attentionCount ?? 0} registros de atencao</small>
+                </div>
+                <div className="student-360-card">
+                  <span>NotasEdit</span>
+                  <strong>{selectedStudent.notasEdit?.syncedAt ? "Sincronizado" : "Pendente"}</strong>
+                  <small>
+                    {selectedStudent.notasEdit?.syncedAt
+                      ? new Date(selectedStudent.notasEdit.syncedAt).toLocaleDateString("pt-BR")
+                      : "Aguardando envio"}
+                  </small>
+                </div>
+              </section>
+
               <div className="ficha-tabs">
                 <button
                   className={fichaTab === "perfil" ? "active" : ""}
@@ -2342,9 +2749,14 @@ export default function App() {
                 <>
                   <div className="quick-row">
                     {quickProfiles.map((profile) => (
-                      <button key={profile.label} onClick={() => applyQuickProfile(profile)}>
-                        {profile.label}
-                      </button>
+                      <div className="quick-profile-card" key={profile.label}>
+                        <button type="button" onClick={() => applyQuickProfile(profile)}>
+                          {profile.label}
+                        </button>
+                        <button type="button" className="ghost" onClick={() => applyQuickProfileAndNext(profile)}>
+                          Aplicar e proximo
+                        </button>
+                      </div>
                     ))}
                   </div>
 
@@ -2361,6 +2773,26 @@ export default function App() {
                         {label}
                       </button>
                     ))}
+                  </div>
+
+                  <div className="quick-incident-strip" aria-label="Ocorrencias rapidas">
+                    <span>Registro rapido</span>
+                    <button type="button" onClick={() => addQuickIncident("Participou bem", "positivo")}>
+                      Participou bem
+                    </button>
+                    <button type="button" onClick={() => addQuickIncident("Nao fez atividade", "pedagogico")}>
+                      Nao fez atividade
+                    </button>
+                    <button type="button" onClick={() => addQuickIncident("Convivencia precisa de atencao", "social")}>
+                      Convivencia
+                    </button>
+                    <button type="button" onClick={() => addQuickIncident("Familia acionada", "familia")}>
+                      Familia acionada
+                    </button>
+                    <button type="button" onClick={() => openQuickIncident(selectedStudent.id)}>
+                      <Plus size={14} />
+                      Outro
+                    </button>
                   </div>
 
                   {selectedCompletion && (
@@ -3819,6 +4251,14 @@ export default function App() {
                         </select>
                         <button
                           type="button"
+                          className="ghost compact-btn"
+                          onClick={() => previewNotasEditDirect(notasEditRows)}
+                          disabled={previewingNotasEdit}
+                        >
+                          <Search size={14} /> {previewingNotasEdit ? "Verificando..." : "Previa"}
+                        </button>
+                        <button
+                          type="button"
                           className="primary compact-btn"
                           onClick={() => syncNotasEditDirect(notasEditRows)}
                           disabled={syncingNotasEdit}
@@ -3859,6 +4299,128 @@ export default function App() {
                         <strong>{averageVistos.toFixed(1)} / 3,0</strong>
                       </div>
                     </div>
+
+                    <div className="pairing-grid">
+                      <div className="pairing-card">
+                        <strong>Parear turma</strong>
+                        <div className="pairing-form">
+                          <input
+                            aria-label="Turma no AFA"
+                            value={classPairDraft.afa}
+                            onChange={(event) => setClassPairDraft((current) => ({ ...current, afa: event.target.value }))}
+                            placeholder="Turma no AFA"
+                          />
+                          <input
+                            aria-label="Turma no NotasEdit"
+                            value={classPairDraft.notas}
+                            onChange={(event) => setClassPairDraft((current) => ({ ...current, notas: event.target.value }))}
+                            placeholder="Turma no NotasEdit"
+                          />
+                          <button type="button" className="ghost compact-btn" onClick={addClassPair}>
+                            <Plus size={13} /> Parear
+                          </button>
+                        </div>
+                        <div className="pairing-list">
+                          {Object.entries(notasEditClassPairs).length === 0 ? (
+                            <small>Sem pareamentos de turma.</small>
+                          ) : (
+                            Object.entries(notasEditClassPairs).map(([afa, notas]) => (
+                              <button
+                                type="button"
+                                key={afa}
+                                onClick={() =>
+                                  setNotasEditClassPairs((current) => {
+                                    const next = { ...current };
+                                    delete next[afa];
+                                    return next;
+                                  })
+                                }
+                              >
+                                {afa} = {notas}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      <div className="pairing-card">
+                        <strong>Parear aluno</strong>
+                        <div className="pairing-form">
+                          <input
+                            aria-label="Aluno no AFA"
+                            value={studentPairDraft.afa}
+                            onChange={(event) => setStudentPairDraft((current) => ({ ...current, afa: event.target.value }))}
+                            placeholder="Aluno no AFA"
+                          />
+                          <input
+                            aria-label="Aluno no NotasEdit"
+                            value={studentPairDraft.notas}
+                            onChange={(event) => setStudentPairDraft((current) => ({ ...current, notas: event.target.value }))}
+                            placeholder="Aluno no NotasEdit"
+                          />
+                          <button type="button" className="ghost compact-btn" onClick={addStudentPair}>
+                            <Plus size={13} /> Parear
+                          </button>
+                        </div>
+                        <div className="pairing-list">
+                          {Object.entries(notasEditStudentPairs).length === 0 ? (
+                            <small>Sem pareamentos de aluno.</small>
+                          ) : (
+                            Object.entries(notasEditStudentPairs).map(([afa, notas]) => (
+                              <button
+                                type="button"
+                                key={afa}
+                                onClick={() =>
+                                  setNotasEditStudentPairs((current) => {
+                                    const next = { ...current };
+                                    delete next[afa];
+                                    return next;
+                                  })
+                                }
+                              >
+                                {afa} = {notas}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {notasEditPreviewRows.length > 0 && (
+                      <div className="notasedit-preview">
+                        <div className="report-table-header">
+                          <h4>Previa de sincronizacao</h4>
+                          <span>
+                            {notasEditPreviewRows.filter((row) => row.status === "ok").length}/{notasEditPreviewRows.length} prontos
+                          </span>
+                        </div>
+                        <div className="table-responsive compact-preview">
+                          <table className="relatorio-vistos-table">
+                            <thead>
+                              <tr>
+                                <th>Aluno</th>
+                                <th>Turma</th>
+                                <th>Status</th>
+                                <th>Comp.</th>
+                                <th>Vistos</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {notasEditPreviewRows.slice(0, 12).map((row) => (
+                                <tr key={row.studentId}>
+                                  <td><strong>{row.name}</strong></td>
+                                  <td>{row.className || "Sem turma"}</td>
+                                  <td>
+                                    <span className={`preview-status ${row.status}`}>{row.detail}</span>
+                                  </td>
+                                  <td>{row.behaviorScore.toFixed(1)}</td>
+                                  <td>{row.vistosScore.toFixed(1)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="table-responsive compact-preview">
                       <table className="relatorio-vistos-table">
@@ -4224,6 +4786,103 @@ export default function App() {
               <button className="primary" onClick={confirmImport}>
                 <Check size={16} />
                 Importar {importPreview.length}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {commandOpen && (
+        <div className="modal-backdrop">
+          <section className="modal command-palette" role="dialog" aria-modal="true" aria-label="Busca global">
+            <div className="modal-header">
+              <div>
+                <h2>Busca global</h2>
+                <p>Abra alunos, vistos, pendencias ou NotasEdit.</p>
+              </div>
+              <button className="icon-button" onClick={() => setCommandOpen(false)} title="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="command-search">
+              <Search size={16} />
+              <input
+                autoFocus
+                aria-label="Buscar comando ou aluno"
+                value={commandQuery}
+                onChange={(event) => setCommandQuery(event.target.value)}
+                placeholder="Digite aluno ou acao"
+              />
+            </div>
+            <div className="command-list">
+              {commandItems.length === 0 ? (
+                <div className="empty-list">
+                  <strong>Nada encontrado</strong>
+                  <span>Tente buscar pelo nome do aluno ou por uma acao.</span>
+                </div>
+              ) : (
+                commandItems.map((item) => (
+                  <button
+                    type="button"
+                    key={item.key}
+                    onClick={() => {
+                      item.run();
+                      setCommandOpen(false);
+                      setCommandQuery("");
+                    }}
+                  >
+                    <span>{item.label}</span>
+                    <small>{item.meta}</small>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {quickIncidentOpen && (
+        <div className="modal-backdrop">
+          <section className="modal quick-incident-modal" role="dialog" aria-modal="true" aria-label="Ocorrencia rapida">
+            <div className="modal-header">
+              <div>
+                <h2>Ocorrencia rapida</h2>
+                <p>Selecione um aluno e registre em um clique.</p>
+              </div>
+              <button className="icon-button" onClick={() => setQuickIncidentOpen(false)} title="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+            <select
+              aria-label="Aluno da ocorrencia rapida"
+              value={quickIncidentStudentId}
+              onChange={(event) => setQuickIncidentStudentId(event.target.value)}
+            >
+              <option value="">Selecione o aluno</option>
+              {students.map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.name} - {student.className || "Sem turma"}
+                </option>
+              ))}
+            </select>
+            <div className="quick-incident-grid">
+              <button type="button" onClick={() => addQuickIncident("Participou bem", "positivo")} disabled={!quickIncidentStudentId}>
+                Participou bem
+              </button>
+              <button type="button" onClick={() => addQuickIncident("Evoluiu na postura em sala", "positivo")} disabled={!quickIncidentStudentId}>
+                Evoluiu na postura
+              </button>
+              <button type="button" onClick={() => addQuickIncident("Nao fez atividade", "pedagogico")} disabled={!quickIncidentStudentId}>
+                Nao fez atividade
+              </button>
+              <button type="button" onClick={() => addQuickIncident("Disperso durante a aula", "observacao")} disabled={!quickIncidentStudentId}>
+                Disperso
+              </button>
+              <button type="button" onClick={() => addQuickIncident("Convivencia precisa de atencao", "social")} disabled={!quickIncidentStudentId}>
+                Convivencia
+              </button>
+              <button type="button" onClick={() => addQuickIncident("Familia acionada", "familia")} disabled={!quickIncidentStudentId}>
+                Familia acionada
               </button>
             </div>
           </section>

@@ -271,6 +271,7 @@ type AfaAudioApiError = Error & {
   endpoint?: string;
   request?: Record<string, unknown>;
   responseBody?: unknown;
+  transcript?: string;
 };
 type AudioExpressionChip = {
   id: string;
@@ -497,7 +498,13 @@ function shouldUseAfaFreeFallback(error: unknown) {
     text.includes("401") ||
     text.includes("402") ||
     text.includes("403") ||
-    text.includes("429")
+    text.includes("408") ||
+    text.includes("429") ||
+    text.includes("500") ||
+    text.includes("502") ||
+    text.includes("503") ||
+    text.includes("504") ||
+    text.includes("timeout")
   );
 }
 
@@ -2399,6 +2406,7 @@ export default function App() {
         apiError.endpoint = "/api/afa-transcribe";
         apiError.request = requestSummary;
         apiError.responseBody = transcribeResult;
+        apiError.transcript = currentTranscript;
         throw apiError;
       }
       
@@ -2438,6 +2446,7 @@ export default function App() {
       apiError.endpoint = "/api/afa-structure";
       apiError.request = requestSummary;
       apiError.responseBody = structureResult;
+      apiError.transcript = currentTranscript;
       throw apiError;
     }
 
@@ -2468,7 +2477,8 @@ export default function App() {
       }
       await requestAfaAudioDraft({ audioBlob: blob });
     } catch (error) {
-      const fallbackText = (audioTranscript.trim() || speechCurrentTranscriptRef.current.trim()).trim();
+      const apiError = error as AfaAudioApiError;
+      const fallbackText = (apiError.transcript || audioTranscript.trim() || speechCurrentTranscriptRef.current.trim()).trim();
       if (audioMode === "api") {
         setAudioDebugLog(buildAudioDebugLog(error, { action: "processar_audio_gravado", audioBlob: blob, transcript: fallbackText }));
       }

@@ -12,6 +12,7 @@ const PROFILE_FIELDS = [
 
 const ALERT_LEVELS = new Set(["tranquilo", "observacao", "atencao", "prioridade"]);
 const INCIDENT_TYPES = new Set(["positivo", "observacao", "familia", "pedagogico", "social"]);
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TEXT_TIMEOUT_MS || 18000);
 
 function json(statusCode, body) {
   return {
@@ -107,15 +108,41 @@ function canUseFreeFallback(error) {
     status === 401 ||
     status === 402 ||
     status === 403 ||
+    status === 408 ||
     status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
     code.includes("quota") ||
     code.includes("billing") ||
     code.includes("credit") ||
+    code.includes("timeout") ||
     message.includes("quota") ||
     message.includes("billing") ||
     message.includes("credit") ||
+    message.includes("timeout") ||
     message.includes("limite")
   );
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("A organizacao pela API demorou demais. Usei o fallback local.");
+      timeoutError.status = 504;
+      timeoutError.code = "openai_timeout";
+      timeoutError.fallback = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function handler(event) {
@@ -154,7 +181,7 @@ export async function handler(event) {
       allowedIncidentTypes: [...INCIDENT_TYPES],
     };
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -162,11 +189,14 @@ export async function handler(event) {
       },
       body: JSON.stringify({
         model: process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
+        temperature: 0.2,
+        max_tokens: 700,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "Voce organiza observacoes escolares em portugues brasileiro. Retorne somente JSON valido, sem markdown. Nao invente fatos. Use frases curtas e adequadas para conversa com familia. Extraia no array 'chips' de 2 a 4 comportamentos ou acoes curtas e ageis mencionadas no audio (ex: 'brinca com responsabilidade', 'registra as atividades').",
+              "Organize observacoes escolares em portugues brasileiro. Retorne somente JSON valido. Nao invente fatos. Use frases curtas para conversa com familia. Extraia chips de ate 3 palavras.",
           },
           {
             role: "user",
@@ -176,7 +206,7 @@ export async function handler(event) {
           },
         ],
       }),
-    });
+    }, OPENAI_TIMEOUT_MS);
 
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {

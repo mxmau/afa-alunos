@@ -1356,13 +1356,48 @@ textarea:focus {
 }
 
 .audio-error {
-  align-items: center;
+  align-items: flex-start;
   background: #fff7f4;
   border: 1px solid #ebc7be;
   color: #9f2d19;
   display: flex;
   gap: 8px;
   padding: 10px 12px;
+}
+
+.audio-error-content {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audio-debug-actions {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.audio-debug-actions details {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.audio-debug-actions summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 7px 0;
+}
+
+.audio-debug-actions textarea {
+  background: #fffdfa;
+  font-family: Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  min-height: 120px;
+  resize: vertical;
+  white-space: pre;
 }
 
 .compact-select {

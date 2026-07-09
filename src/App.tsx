@@ -262,6 +262,15 @@ type AfaAudioDraft = {
     notes: string;
   }>;
 };
+type AfaAudioApiError = Error & {
+  fallback?: boolean;
+  code?: string;
+  status?: number;
+  statusText?: string;
+  endpoint?: string;
+  request?: Record<string, unknown>;
+  responseBody?: unknown;
+};
 type AudioExpressionChip = {
   id: string;
   text: string;
@@ -672,6 +681,7 @@ export default function App() {
   const [audioTranscript, setAudioTranscript] = useState("");
   const [audioDraft, setAudioDraft] = useState<AfaAudioDraft | null>(null);
   const [audioError, setAudioError] = useState("");
+  const [audioDebugLog, setAudioDebugLog] = useState("");
   const [audioFreeSupported, setAudioFreeSupported] = useState(false);
   const [audioExpressionChips, setAudioExpressionChips] = useState<AudioExpressionChip[]>(() => {
     try {
@@ -2148,6 +2158,7 @@ export default function App() {
     setAudioTranscript("");
     setAudioDraft(null);
     setAudioError("");
+    setAudioDebugLog("");
     setAudioApplyMode("merge");
   }
 
@@ -2223,7 +2234,10 @@ export default function App() {
     setAudioTranscript(cleanTranscript);
     setAudioDraft(nextDraft);
     registerAudioExpressionChips(cleanTranscript);
-    if (source === "api") setAudioError("");
+    if (source === "api") {
+      setAudioError("");
+      setAudioDebugLog("");
+    }
   }
 
   function insertAudioChipText(text: string) {
@@ -2247,6 +2261,67 @@ export default function App() {
     setAudioRecording(false);
     setAudioProcessing(false);
     setAudioAfaOpen(false);
+  }
+
+  function buildAudioDebugLog(
+    error: unknown,
+    context: { action: string; transcript?: string; audioBlob?: Blob; mode?: AfaAudioMode },
+  ) {
+    const apiError = error as AfaAudioApiError;
+    const transcript = (context.transcript || audioTranscript || "").trim();
+    const now = new Date();
+    const payload = {
+      createdAt: now.toISOString(),
+      app: "AFA Panorama Escolar",
+      area: "Ditado AFA",
+      action: context.action,
+      pageUrl: typeof window !== "undefined" ? window.location.href : "",
+      mode: context.mode || audioMode,
+      student: selectedStudent
+        ? {
+            id: selectedStudent.id,
+            name: selectedStudent.name,
+            className: selectedStudent.className,
+            campus: selectedStudent.campus,
+          }
+        : null,
+      audio: {
+        blobSize: context.audioBlob?.size || null,
+        blobType: context.audioBlob?.type || null,
+        transcriptLength: transcript.length,
+        transcriptPreview: transcript.slice(0, 420),
+      },
+      browser: {
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+        language: typeof navigator !== "undefined" ? navigator.language : "",
+        online: typeof navigator !== "undefined" ? navigator.onLine : null,
+      },
+      error: {
+        name: apiError.name || "Error",
+        message: apiError.message || String(error),
+        code: apiError.code || "",
+        status: apiError.status || null,
+        statusText: apiError.statusText || "",
+        fallback: Boolean(apiError.fallback),
+      },
+      api: {
+        endpoint: apiError.endpoint || "/api/afa-audio",
+        request: apiError.request || null,
+        responseBody: apiError.responseBody || null,
+      },
+    };
+
+    return JSON.stringify(payload, null, 2);
+  }
+
+  async function copyAudioDebugLog() {
+    if (!audioDebugLog) return;
+    try {
+      await navigator.clipboard.writeText(audioDebugLog);
+      setMessage("Logs do audio copiados.");
+    } catch {
+      setMessage("Nao consegui copiar automaticamente. Abra 'Ver logs' e copie o texto manualmente.");
+    }
   }
 
   function blobToBase64(blob: Blob) {
@@ -2278,6 +2353,15 @@ export default function App() {
 
     const audioBase64 = options.audioBlob ? await blobToBase64(options.audioBlob) : undefined;
     const mimeType = options.audioBlob?.type || "audio/webm";
+    const requestSummary = {
+      hasAudio: Boolean(options.audioBlob),
+      audioSize: options.audioBlob?.size || 0,
+      mimeType,
+      transcriptLength: options.transcript?.trim().length || 0,
+      studentId: selectedStudent.id,
+      studentClass: selectedStudent.className,
+      studentCampus: selectedStudent.campus,
+    };
     const response = await fetch("/api/afa-audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2295,25 +2379,38 @@ export default function App() {
       }),
     });
 
-    const result = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let result: Record<string, unknown> = {};
+    try {
+      result = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      result = { raw: responseText.slice(0, 1600) };
+    }
+
     if (!response.ok) {
-      const apiError = new Error(result.error || "Nao consegui processar o audio pela API.") as Error & {
-        fallback?: boolean;
-        code?: string;
-        status?: number;
-      };
+      const errorMessage = typeof result.error === "string" ? result.error : "Nao consegui processar o audio pela API.";
+      const apiError = new Error(errorMessage) as AfaAudioApiError;
       apiError.fallback = Boolean(result.fallback);
-      apiError.code = result.code;
-      apiError.status = result.status || response.status;
+      apiError.code = typeof result.code === "string" ? result.code : "";
+      apiError.status = Number(result.status || response.status);
+      apiError.statusText = response.statusText;
+      apiError.endpoint = "/api/afa-audio";
+      apiError.request = requestSummary;
+      apiError.responseBody = result;
       throw apiError;
     }
 
-    applyAudioDraftFromTranscript(result.transcript || options.transcript || "", "api", cleanAudioDraft(result.draft));
+    applyAudioDraftFromTranscript(
+      typeof result.transcript === "string" ? result.transcript : options.transcript || "",
+      "api",
+      cleanAudioDraft(result.draft),
+    );
   }
 
   async function processAfaAudioBlob(blob: Blob) {
     setAudioProcessing(true);
     setAudioError("");
+    setAudioDebugLog("");
     try {
       if (audioMode === "local") {
         if (!audioTranscript.trim()) {
@@ -2331,6 +2428,9 @@ export default function App() {
       await requestAfaAudioDraft({ audioBlob: blob });
     } catch (error) {
       const fallbackText = (audioTranscript.trim() || speechCurrentTranscriptRef.current.trim()).trim();
+      if (audioMode === "api") {
+        setAudioDebugLog(buildAudioDebugLog(error, { action: "processar_audio_gravado", audioBlob: blob, transcript: fallbackText }));
+      }
       if (fallbackText) {
         applyAudioDraftFromTranscript(fallbackText, "local");
         if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
@@ -2582,6 +2682,7 @@ export default function App() {
 
     setAudioProcessing(true);
     setAudioError("");
+    setAudioDebugLog("");
     try {
       if (audioMode === "api") {
         await requestAfaAudioDraft({ transcript });
@@ -2590,6 +2691,9 @@ export default function App() {
       }
     } catch (error) {
       applyAudioDraftFromTranscript(transcript, "local");
+      if (audioMode === "api") {
+        setAudioDebugLog(buildAudioDebugLog(error, { action: "organizar_transcricao_digitada", transcript }));
+      }
       if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
       setAudioError(
         error instanceof Error
@@ -5830,7 +5934,21 @@ export default function App() {
             {audioError && (
               <div className="audio-error">
                 <AlertTriangle size={16} />
-                {audioError}
+                <div className="audio-error-content">
+                  <span>{audioError}</span>
+                  {audioDebugLog && (
+                    <div className="audio-debug-actions">
+                      <button type="button" className="ghost compact-btn" onClick={copyAudioDebugLog}>
+                        <Copy size={14} />
+                        Copiar logs
+                      </button>
+                      <details>
+                        <summary>Ver logs</summary>
+                        <textarea readOnly value={audioDebugLog} onFocus={(event) => event.currentTarget.select()} />
+                      </details>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

@@ -16,11 +16,13 @@ import {
   LayoutDashboard,
   LogIn,
   MessageCircle,
+  Mic,
   Plus,
   PlusCircle,
   Search,
   Settings,
   Sparkles,
+  Square,
   Trash2,
   Undo2,
   Upload,
@@ -30,7 +32,7 @@ import {
 } from "lucide-react";
 import { type User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
 import { collection, doc, setDoc, deleteDoc, writeBatch, query, where, getDocs } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isStudentBackup } from "./lib/backup";
 import { buildStudentsCsv, buildStudentsJson } from "./lib/exportStudents";
 import { needsNameReview } from "./lib/importReview";
@@ -47,7 +49,10 @@ import {
   findNotasEditTargetClass,
   findNotasEditTargetStudent,
   filterVistosByPeriod,
+  getCurrentNotasEditBimester,
+  getNotasEditBimesterLabel,
   getPeriodLabel,
+  NotasEditBimester,
   parseNotasEditImport,
 } from "./lib/notasEdit";
 import { notasEditAuth, notasEditDb } from "./lib/notasEditFirebase";
@@ -82,6 +87,7 @@ import {
   Incident,
   NotasEditPeriod,
   Student,
+  StudentProfile,
   VirtualCheckEntry,
   VirtualCheckTemplate,
   VirtualCheckConfig,
@@ -152,6 +158,86 @@ const quickProfiles: Array<{
       apoioFamilia: "É importante manter diálogo frequente com a escola e acompanhar combinados semanais.",
     },
   },
+  {
+    label: "Autonomo e constante",
+    alertLevel: "tranquilo",
+    tags: ["autonomia", "constancia"],
+    profile: {
+      resumoRapido: "Aluno(a) demonstra autonomia, constancia e boa resposta aos combinados da rotina escolar.",
+      positivos: "Organiza-se bem, conclui atividades com regularidade e contribui para um ambiente de trabalho.",
+      manter: "Manter autonomia, responsabilidade com prazos e postura colaborativa.",
+    },
+  },
+  {
+    label: "Potencial com oscilacao",
+    alertLevel: "observacao",
+    tags: ["potencial", "oscilacao"],
+    profile: {
+      resumoRapido: "Aluno(a) apresenta potencial, mas oscila entre momentos de boa participacao e queda de foco.",
+      atencao: "Precisa reduzir oscilacoes de concentracao e manter regularidade na conclusao das tarefas.",
+      melhorar: "Fortalecer constancia, organizacao e retomada rapida apos momentos de dispersao.",
+    },
+  },
+  {
+    label: "Agitado responsivo",
+    alertLevel: "atencao",
+    tags: ["agitado", "mediacao"],
+    profile: {
+      resumoRapido: "Aluno(a) demonstra energia e participacao, mas precisa canalizar melhor sua postura em sala.",
+      social: "Responde melhor quando recebe combinados objetivos e mediacao breve no momento da agitacao.",
+      melhorar: "Controlar impulsos, respeitar turnos de fala e manter foco durante orientacoes coletivas.",
+    },
+  },
+  {
+    label: "Entrega irregular",
+    alertLevel: "atencao",
+    tags: ["entregas", "rotina"],
+    profile: {
+      resumoRapido: "Aluno(a) acompanha parte das propostas, mas apresenta irregularidade na entrega e finalizacao das atividades.",
+      pedagogico: "Precisa registrar melhor as etapas, concluir tarefas e acompanhar correcoes com mais cuidado.",
+      apoioFamilia: "A familia pode apoiar conferindo tarefas, materiais e rotina de estudo semanal.",
+    },
+  },
+  {
+    label: "Social reservado",
+    alertLevel: "observacao",
+    tags: ["reservado", "social"],
+    profile: {
+      resumoRapido: "Aluno(a) tem perfil reservado e pode precisar de incentivo para se integrar mais ao grupo.",
+      personalidade: "Observa bastante antes de se posicionar e tende a participar melhor em interacoes menores.",
+      social: "Estimular participacao gradual, vinculos positivos e seguranca para se expressar.",
+    },
+  },
+  {
+    label: "Lideranca positiva",
+    alertLevel: "tranquilo",
+    tags: ["lideranca", "colaboracao"],
+    profile: {
+      resumoRapido: "Aluno(a) exerce influencia positiva no grupo e costuma colaborar com a dinamica da turma.",
+      positivos: "Demonstra iniciativa, ajuda colegas e contribui para a organizacao das atividades.",
+      manter: "Manter lideranca respeitosa, cooperacao e responsabilidade nas atividades coletivas.",
+    },
+  },
+  {
+    label: "Desorganizacao recorrente",
+    alertLevel: "atencao",
+    tags: ["desorganizacao", "materiais"],
+    profile: {
+      resumoRapido: "Aluno(a) precisa fortalecer organizacao de materiais, registros e prazos para melhorar o rendimento.",
+      atencao: "Esquecimentos e falta de registro interferem na continuidade das atividades.",
+      melhorar: "Usar rotina de conferencia, registrar tarefas e organizar materiais antes das aulas.",
+    },
+  },
+  {
+    label: "Retomada positiva",
+    alertLevel: "observacao",
+    tags: ["retomada", "evolucao"],
+    profile: {
+      resumoRapido: "Aluno(a) apresenta sinais de retomada positiva e precisa consolidar os avancos recentes.",
+      positivos: "Tem aceitado melhor orientacoes e demonstrado melhora gradual na postura.",
+      manter: "Manter os avancos observados, valorizar pequenas conquistas e acompanhar a constancia.",
+    },
+  },
 ];
 
 const incidentLabels: Record<Incident["type"], string> = {
@@ -164,6 +250,49 @@ const incidentLabels: Record<Incident["type"], string> = {
 
 type AppPage = "turmas" | "alunos" | "ficha" | "vistos" | "sync";
 type QueueMode = "filtro-atual" | "sem-ficha" | "incompleta" | "prioridade" | "sem-vistos" | "nao-sincronizados";
+type AfaAudioMode = "api" | "gratis" | "local";
+type AfaAudioApplyMode = "merge" | "replace";
+type AfaAudioDraft = {
+  profile: Partial<StudentProfile>;
+  alertLevel?: AlertLevel;
+  tags: string[];
+  incidents: Array<{
+    type: Incident["type"];
+    title: string;
+    notes: string;
+  }>;
+};
+type BrowserSpeechRecognitionResult = {
+  isFinal: boolean;
+  0: { transcript: string };
+};
+type BrowserSpeechRecognitionEvent = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: BrowserSpeechRecognitionResult;
+  };
+};
+type BrowserSpeechRecognitionErrorEvent = {
+  error?: string;
+  message?: string;
+};
+type BrowserSpeechRecognition = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort?: () => void;
+};
+type BrowserSpeechWindow = Window & {
+  SpeechRecognition?: new () => BrowserSpeechRecognition;
+  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+};
 type NotasEditPreviewRow = {
   studentId: string;
   name: string;
@@ -173,6 +302,162 @@ type NotasEditPreviewRow = {
   status: "ok" | "turma" | "aluno";
   detail: string;
 };
+
+const afaAudioProfileFields: Array<keyof StudentProfile> = [
+  "resumoRapido",
+  "personalidade",
+  "positivos",
+  "atencao",
+  "social",
+  "pedagogico",
+  "melhorar",
+  "manter",
+  "apoioFamilia",
+];
+
+const afaAudioProfileLabels: Record<keyof StudentProfile, string> = {
+  resumoRapido: "Resumo rapido",
+  personalidade: "Perfil observado",
+  positivos: "Aspectos positivos",
+  atencao: "Pontos de atencao",
+  social: "Social",
+  pedagogico: "Pedagogico",
+  melhorar: "Precisa melhorar",
+  manter: "Precisa manter",
+  apoioFamilia: "Apoio da familia",
+};
+
+function normalizeForMatch(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR");
+}
+
+function splitObservationSentences(text: string) {
+  return text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+|\n+|;\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+function pickSentences(sentences: string[], keywords: string[], limit = 2) {
+  return sentences
+    .filter((sentence) => keywords.some((keyword) => normalizeForMatch(sentence).includes(keyword)))
+    .slice(0, limit)
+    .join(" ");
+}
+
+function inferAudioAlertLevel(normalized: string): AlertLevel {
+  const priorityWords = ["agress", "ameac", "familia acionada", "recorrente", "grave", "fuga", "risco"];
+  const attentionWords = ["dispers", "conversa", "nao fez", "pendencia", "conflito", "desorganiz", "impuls", "atrapalha"];
+  const attentionScore = attentionWords.filter((word) => normalized.includes(word)).length;
+
+  if (priorityWords.some((word) => normalized.includes(word))) return "prioridade";
+  if (attentionScore >= 2) return "atencao";
+  if (attentionScore === 1) return "observacao";
+  return "tranquilo";
+}
+
+function buildLocalAudioDraft(transcript: string): AfaAudioDraft {
+  const sentences = splitObservationSentences(transcript);
+  const normalized = normalizeForMatch(transcript);
+  const firstSentences = sentences.slice(0, 2).join(" ");
+  const positive = pickSentences(sentences, ["particip", "colabora", "ajuda", "respeita", "melhor", "responsavel", "caprich"]);
+  const attention = pickSentences(sentences, ["dispers", "conversa", "nao fez", "pendencia", "desorganiz", "impuls", "atras", "dificuldade"]);
+  const social = pickSentences(sentences, ["colega", "grupo", "conviv", "conflito", "respeito", "interage", "social"]);
+  const pedagogical = pickSentences(sentences, ["atividade", "tarefa", "registro", "caderno", "conteudo", "leitura", "visto", "producao"]);
+  const family = pickSentences(sentences, ["familia", "responsavel", "casa", "acompanhar", "combinado"]);
+  const profile = {
+    resumoRapido: firstSentences || transcript.trim(),
+    positivos: positive,
+    atencao: attention,
+    social,
+    pedagogico: pedagogical,
+    melhorar: attention ? `Fortalecer ${attention.charAt(0).toLocaleLowerCase("pt-BR")}${attention.slice(1)}` : "",
+    manter: positive ? `Manter ${positive.charAt(0).toLocaleLowerCase("pt-BR")}${positive.slice(1)}` : "",
+    apoioFamilia: family,
+  };
+  const tags = [
+    positive ? "ponto positivo" : "",
+    attention ? "acompanhar" : "",
+    social ? "social" : "",
+    pedagogical ? "pedagogico" : "",
+  ].filter(Boolean);
+
+  return {
+    profile,
+    alertLevel: inferAudioAlertLevel(normalized),
+    tags,
+    incidents: [
+      {
+        type: attention ? "observacao" : "positivo",
+        title: "Registro por audio",
+        notes: transcript.trim().slice(0, 600),
+      },
+    ],
+  };
+}
+
+function cleanAudioDraft(input: unknown): AfaAudioDraft {
+  const source = input && typeof input === "object" ? (input as Partial<AfaAudioDraft>) : {};
+  const profileSource = source.profile && typeof source.profile === "object" ? source.profile : {};
+  const profile: Partial<StudentProfile> = {};
+
+  for (const field of afaAudioProfileFields) {
+    const value = profileSource[field];
+    if (typeof value === "string" && value.trim()) profile[field] = value.trim();
+  }
+
+  const alertLevel = ["tranquilo", "observacao", "atencao", "prioridade"].includes(source.alertLevel || "")
+    ? source.alertLevel
+    : undefined;
+  const tags = Array.isArray(source.tags)
+    ? [...new Set(source.tags.map((tag) => (typeof tag === "string" ? tag.trim().toLocaleLowerCase("pt-BR") : "")).filter(Boolean))].slice(0, 8)
+    : [];
+  const incidents = Array.isArray(source.incidents)
+    ? source.incidents
+        .map((incident) => {
+          if (!incident || typeof incident !== "object") return null;
+          const candidate = incident as Partial<Incident>;
+          const type = ["positivo", "observacao", "familia", "pedagogico", "social"].includes(candidate.type || "")
+            ? candidate.type
+            : "observacao";
+          const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+          const notes = typeof candidate.notes === "string" ? candidate.notes.trim() : "";
+          if (!title && !notes) return null;
+          return { type, title: title || "Registro por audio", notes };
+        })
+        .filter((incident): incident is AfaAudioDraft["incidents"][number] => Boolean(incident))
+        .slice(0, 4)
+    : [];
+
+  return { profile, alertLevel, tags, incidents };
+}
+
+function getBrowserSpeechRecognition() {
+  if (typeof window === "undefined") return null;
+  const speechWindow = window as BrowserSpeechWindow;
+  return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
+}
+
+function shouldUseAfaFreeFallback(error: unknown) {
+  const apiError = error as Error & { fallback?: boolean; code?: string; status?: number };
+  const text = `${apiError.message || ""} ${apiError.code || ""} ${apiError.status || ""}`.toLocaleLowerCase("pt-BR");
+  return (
+    Boolean(apiError.fallback) ||
+    text.includes("quota") ||
+    text.includes("credit") ||
+    text.includes("billing") ||
+    text.includes("openai_api_key") ||
+    text.includes("missing_api_key") ||
+    text.includes("401") ||
+    text.includes("402") ||
+    text.includes("403") ||
+    text.includes("429")
+  );
+}
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
@@ -278,7 +563,7 @@ export default function App() {
   // For reports
   const [reportClass, setReportClass] = useState<string>("todas");
   const [reportPeriod, setReportPeriod] = useState<NotasEditPeriod>("mes");
-  const [notasEditBimester, setNotasEditBimester] = useState<"b1" | "b2" | "b3" | "b4">("b1");
+  const [notasEditBimester, setNotasEditBimester] = useState<NotasEditBimester>(() => getCurrentNotasEditBimester());
   const [syncingNotasEdit, setSyncingNotasEdit] = useState(false);
   const [previewingNotasEdit, setPreviewingNotasEdit] = useState(false);
   const [notasEditPreviewRows, setNotasEditPreviewRows] = useState<NotasEditPreviewRow[]>([]);
@@ -305,6 +590,21 @@ export default function App() {
   const [commandQuery, setCommandQuery] = useState("");
   const [quickIncidentOpen, setQuickIncidentOpen] = useState(false);
   const [quickIncidentStudentId, setQuickIncidentStudentId] = useState("");
+  const [audioAfaOpen, setAudioAfaOpen] = useState(false);
+  const [audioMode, setAudioMode] = useState<AfaAudioMode>("api");
+  const [audioApplyMode, setAudioApplyMode] = useState<AfaAudioApplyMode>("merge");
+  const [audioRecording, setAudioRecording] = useState(false);
+  const [audioProcessing, setAudioProcessing] = useState(false);
+  const [audioTranscript, setAudioTranscript] = useState("");
+  const [audioDraft, setAudioDraft] = useState<AfaAudioDraft | null>(null);
+  const [audioError, setAudioError] = useState("");
+  const [audioFreeSupported, setAudioFreeSupported] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechBaseTranscriptRef = useRef("");
+  const speechFinalTranscriptRef = useRef("");
+  const speechCurrentTranscriptRef = useRef("");
 
   // Checkbox selection of students in Lançamento
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -382,6 +682,10 @@ export default function App() {
 
     window.addEventListener("keydown", handleCommandShortcut);
     return () => window.removeEventListener("keydown", handleCommandShortcut);
+  }, []);
+
+  useEffect(() => {
+    setAudioFreeSupported(Boolean(getBrowserSpeechRecognition()));
   }, []);
 
 
@@ -1227,18 +1531,22 @@ export default function App() {
   const selectedNotasEditRow = useMemo(
     () =>
       selectedStudent
-        ? buildNotasEditRows(students, { period: reportPeriod, classFilter: selectedStudent.className || "todas" }).find(
+        ? buildNotasEditRows(students, {
+            period: "bimestre",
+            classFilter: selectedStudent.className || "todas",
+            bimester: notasEditBimester,
+          }).find(
             (row) => row.studentId === selectedStudent.id,
           ) ?? null
         : null,
-    [reportPeriod, selectedStudent, students],
+    [notasEditBimester, selectedStudent, students],
   );
 
   const selectedEvolution = useMemo(() => {
     if (!selectedStudent) return null;
     const vistos = selectedStudent.vistos ?? [];
     const monthVistos = filterVistosByPeriod(vistos, "mes");
-    const bimesterVistos = filterVistosByPeriod(vistos, "bimestre");
+    const bimesterVistos = filterVistosByPeriod(vistos, "bimestre", new Date(), notasEditBimester);
     const monthBalance = monthVistos.reduce((sum, visto) => sum + visto.value, 0);
     const bimesterBalance = bimesterVistos.reduce((sum, visto) => sum + visto.value, 0);
     const recentIncidents = selectedStudent.incidents.filter((incident) => {
@@ -1255,7 +1563,7 @@ export default function App() {
           ? "atenção"
           : "estável";
     return { monthBalance, bimesterBalance, recentIncidents: recentIncidents.length, attentionCount, trend };
-  }, [selectedStudent]);
+  }, [notasEditBimester, selectedStudent]);
 
   const commandItems = useMemo(() => {
     const normalized = commandQuery.trim().toLocaleLowerCase("pt-BR");
@@ -1478,7 +1786,7 @@ export default function App() {
     }
   }
 
-  async function syncNotasEditDirect(rows = buildNotasEditRows(students, { period: reportPeriod, classFilter: reportClass })) {
+  async function syncNotasEditDirect(rows = buildNotasEditRows(students, { period: "bimestre", classFilter: reportClass, bimester: notasEditBimester })) {
     if (!rows.length) {
       setMessage("Não há alunos no filtro atual para sincronizar com o NotasEdit.");
       return;
@@ -1607,7 +1915,7 @@ export default function App() {
     }
   }
 
-  async function previewNotasEditDirect(rows = buildNotasEditRows(students, { period: reportPeriod, classFilter: reportClass })) {
+  async function previewNotasEditDirect(rows = buildNotasEditRows(students, { period: "bimestre", classFilter: reportClass, bimester: notasEditBimester })) {
     if (!rows.length) {
       setMessage("Não há alunos no filtro atual para pré-visualizar.");
       return;
@@ -1747,6 +2055,323 @@ export default function App() {
     if (studentId) setQuickIncidentStudentId(studentId);
     setQuickIncidentOpen(true);
     setCommandOpen(false);
+  }
+
+  function resetAudioAfa() {
+    setAudioTranscript("");
+    setAudioDraft(null);
+    setAudioError("");
+    setAudioApplyMode("merge");
+  }
+
+  function openAudioAfa() {
+    resetAudioAfa();
+    setAudioAfaOpen(true);
+    setCommandOpen(false);
+  }
+
+  function closeAudioAfa() {
+    stopFreeSpeechRecognition(false);
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = null;
+      recorder.stop();
+      recorder.stream.getTracks().forEach((track) => track.stop());
+    }
+    mediaRecorderRef.current = null;
+    setAudioRecording(false);
+    setAudioProcessing(false);
+    setAudioAfaOpen(false);
+  }
+
+  function blobToBase64(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Nao consegui ler o audio gravado."));
+      reader.onloadend = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        resolve(result.includes(",") ? result.split(",")[1] : result);
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function requestAfaAudioDraft(options: { audioBlob?: Blob; transcript?: string }) {
+    if (!selectedStudent) return;
+
+    const audioBase64 = options.audioBlob ? await blobToBase64(options.audioBlob) : undefined;
+    const response = await fetch("/api/afa-audio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audioBase64,
+        mimeType: options.audioBlob?.type || "audio/webm",
+        fileName: `afa-${selectedStudent.id}.webm`,
+        transcript: options.transcript,
+        student: {
+          name: selectedStudent.name,
+          className: selectedStudent.className,
+          campus: selectedStudent.campus,
+        },
+        existingProfile: selectedStudent.profile,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const apiError = new Error(result.error || "Nao consegui processar o audio pela API.") as Error & {
+        fallback?: boolean;
+        code?: string;
+        status?: number;
+      };
+      apiError.fallback = Boolean(result.fallback);
+      apiError.code = result.code;
+      apiError.status = result.status || response.status;
+      throw apiError;
+    }
+
+    setAudioTranscript(result.transcript || options.transcript || "");
+    setAudioDraft(cleanAudioDraft(result.draft));
+    setAudioError("");
+  }
+
+  async function processAfaAudioBlob(blob: Blob) {
+    setAudioProcessing(true);
+    setAudioError("");
+    try {
+      if (audioMode === "local") {
+        if (!audioTranscript.trim()) {
+          throw new Error("No modo local, cole a transcricao antes de organizar a ficha.");
+        }
+        setAudioDraft(buildLocalAudioDraft(audioTranscript));
+        return;
+      }
+      if (audioMode === "gratis") {
+        const transcript = audioTranscript.trim();
+        if (!transcript) throw new Error("Use o ditado gratis do navegador ou cole a transcricao.");
+        setAudioDraft(buildLocalAudioDraft(transcript));
+        return;
+      }
+      await requestAfaAudioDraft({ audioBlob: blob });
+    } catch (error) {
+      const fallbackText = audioTranscript.trim();
+      if (fallbackText) {
+        setAudioDraft(buildLocalAudioDraft(fallbackText));
+        if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
+        setAudioError(
+          error instanceof Error
+            ? `${error.message} Usei as regras locais com o texto disponivel.`
+            : "Usei as regras locais com o texto disponivel.",
+        );
+      } else {
+        if (shouldUseAfaFreeFallback(error)) {
+          setAudioMode(audioFreeSupported ? "gratis" : "local");
+          setAudioError(
+            audioFreeSupported
+              ? "A API paga falhou ou ficou sem credito. Ativei o modo gratis; grave novamente pelo navegador."
+              : "A API paga falhou ou ficou sem credito. Cole a transcricao para usar as regras locais.",
+          );
+        } else {
+          setAudioError(error instanceof Error ? error.message : "Nao consegui processar o audio.");
+        }
+      }
+    } finally {
+      setAudioProcessing(false);
+    }
+  }
+
+  async function startAudioRecording() {
+    if (audioMode === "gratis") {
+      startFreeSpeechRecognition();
+      return;
+    }
+    if (audioMode === "local") {
+      setAudioError("No modo local, cole a transcricao e clique em Organizar texto. Para ditar sem custo, use o modo Gratis.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setAudioError("Este navegador nao liberou gravacao de audio.");
+      return;
+    }
+
+    setAudioError("");
+    setAudioDraft(null);
+    audioChunksRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const options = MediaRecorder.isTypeSupported("audio/webm") ? { mimeType: "audio/webm" } : undefined;
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        recorder.stream.getTracks().forEach((track) => track.stop());
+        void processAfaAudioBlob(audioBlob);
+      };
+      recorder.start();
+      setAudioRecording(true);
+    } catch (error) {
+      setAudioError(error instanceof Error ? error.message : "Nao consegui iniciar a gravacao.");
+    }
+  }
+
+  function stopAudioRecording() {
+    if (audioMode === "gratis") {
+      stopFreeSpeechRecognition(true);
+      return;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    recorder.stop();
+    setAudioRecording(false);
+  }
+
+  function startFreeSpeechRecognition() {
+    const Recognition = getBrowserSpeechRecognition();
+    if (!Recognition) {
+      setAudioFreeSupported(false);
+      setAudioMode("local");
+      setAudioError("Ditado gratis indisponivel neste navegador. Cole a transcricao para usar regras locais.");
+      return;
+    }
+
+    setAudioFreeSupported(true);
+    setAudioError("");
+    setAudioDraft(null);
+    setAudioProcessing(false);
+
+    const recognition = new Recognition();
+    recognition.lang = "pt-BR";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    speechBaseTranscriptRef.current = audioTranscript.trim();
+    speechFinalTranscriptRef.current = "";
+    speechCurrentTranscriptRef.current = speechBaseTranscriptRef.current;
+
+    recognition.onresult = (event) => {
+      let finalText = speechFinalTranscriptRef.current;
+      let interimText = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript?.trim() || "";
+        if (!transcript) continue;
+        if (result.isFinal) {
+          finalText = `${finalText} ${transcript}`.trim();
+        } else {
+          interimText = `${interimText} ${transcript}`.trim();
+        }
+      }
+
+      speechFinalTranscriptRef.current = finalText;
+      const current = [speechBaseTranscriptRef.current, finalText, interimText].filter(Boolean).join(" ").trim();
+      speechCurrentTranscriptRef.current = current;
+      setAudioTranscript(current);
+    };
+
+    recognition.onerror = (event) => {
+      setAudioRecording(false);
+      const detail = event.error || event.message || "erro desconhecido";
+      setAudioError(`Ditado gratis interrompido pelo navegador: ${detail}. Voce ainda pode organizar o texto capturado.`);
+    };
+
+    recognition.onend = () => {
+      setAudioRecording(false);
+      speechRecognitionRef.current = null;
+      const transcript = speechCurrentTranscriptRef.current.trim();
+      if (transcript) setAudioDraft(buildLocalAudioDraft(transcript));
+    };
+
+    speechRecognitionRef.current = recognition;
+    try {
+      recognition.start();
+      setAudioRecording(true);
+    } catch (error) {
+      speechRecognitionRef.current = null;
+      setAudioRecording(false);
+      setAudioError(error instanceof Error ? error.message : "Nao consegui iniciar o ditado gratis.");
+    }
+  }
+
+  function stopFreeSpeechRecognition(organizeDraft: boolean) {
+    const recognition = speechRecognitionRef.current;
+    if (!recognition) return;
+    recognition.onend = null;
+    recognition.stop();
+    speechRecognitionRef.current = null;
+    setAudioRecording(false);
+
+    const transcript = speechCurrentTranscriptRef.current.trim() || audioTranscript.trim();
+    if (organizeDraft && transcript) {
+      setAudioTranscript(transcript);
+      setAudioDraft(buildLocalAudioDraft(transcript));
+    }
+  }
+
+  async function organizeAudioTranscript() {
+    const transcript = audioTranscript.trim();
+    if (!transcript) {
+      setAudioError("Cole ou transcreva algum texto antes de organizar.");
+      return;
+    }
+
+    setAudioProcessing(true);
+    setAudioError("");
+    try {
+      if (audioMode === "api") {
+        await requestAfaAudioDraft({ transcript });
+      } else {
+        setAudioDraft(buildLocalAudioDraft(transcript));
+      }
+    } catch (error) {
+      setAudioDraft(buildLocalAudioDraft(transcript));
+      if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
+      setAudioError(
+        error instanceof Error
+          ? `${error.message} Usei as regras locais como fallback.`
+          : "Usei as regras locais como fallback.",
+      );
+    } finally {
+      setAudioProcessing(false);
+    }
+  }
+
+  function applyAudioDraft() {
+    if (!selectedStudent || !audioDraft) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    updateStudent(selectedStudent.id, (student) => {
+      const nextProfile = { ...student.profile };
+      for (const field of afaAudioProfileFields) {
+        const value = audioDraft.profile[field];
+        if (!value) continue;
+        nextProfile[field] = audioApplyMode === "replace" ? value : appendPhrase(nextProfile[field], value);
+      }
+
+      const newIncidents: Incident[] = audioDraft.incidents.map((incident) => ({
+        id: crypto.randomUUID(),
+        date: today,
+        type: incident.type,
+        title: incident.title,
+        notes: incident.notes,
+      }));
+
+      return {
+        ...student,
+        alertLevel: audioDraft.alertLevel || student.alertLevel,
+        tags: [...new Set([...student.tags, ...audioDraft.tags])],
+        profile: nextProfile,
+        incidents: [...newIncidents, ...student.incidents],
+      };
+    });
+
+    setMessage("Ditado AFA aplicado na ficha.");
+    setAudioAfaOpen(false);
   }
 
   function addQuickIncident(title: string, type: Incident["type"] = "observacao", notes = "") {
@@ -2690,9 +3315,9 @@ export default function App() {
 
               <section className="student-360-grid" aria-label="Visao geral do aluno">
                 <div className="student-360-card">
-                  <span>Comportamento</span>
+                  <span>Comportamento bimestral</span>
                   <strong>{selectedNotasEditRow ? selectedNotasEditRow.behaviorScore.toFixed(1) : "0.0"} / 2,0</strong>
-                  <small>{getPeriodLabel(reportPeriod)}</small>
+                  <small>{getNotasEditBimesterLabel(notasEditBimester)}</small>
                 </div>
                 <div className="student-360-card">
                   <span>Vistos</span>
@@ -2747,6 +3372,18 @@ export default function App() {
 
               {fichaTab === "perfil" ? (
                 <>
+                  <section className="audio-afa-card">
+                    <div>
+                      <span>Preenchimento rapido por audio</span>
+                      <strong>Ditado AFA</strong>
+                      <small>Grave ou cole uma transcricao para gerar um rascunho da ficha.</small>
+                    </div>
+                    <button className="primary" type="button" onClick={openAudioAfa}>
+                      <Mic size={16} />
+                      Abrir ditado
+                    </button>
+                  </section>
+
                   <div className="quick-row">
                     {quickProfiles.map((profile) => (
                       <div className="quick-profile-card" key={profile.label}>
@@ -4027,8 +4664,9 @@ export default function App() {
               });
 
               const notasEditRows = buildNotasEditRows(students, {
-                period: reportPeriod,
+                period: "bimestre",
                 classFilter: reportClassFilter,
+                bimester: notasEditBimester,
               });
               const averageBehavior = notasEditRows.length
                 ? notasEditRows.reduce((sum, row) => sum + row.behaviorScore, 0) / notasEditRows.length
@@ -4091,7 +4729,7 @@ export default function App() {
 
               function exportNotasEditCSV() {
                 downloadFile(
-                  `notasedit-afa-${reportClass}-${reportPeriod}.csv`,
+                  `notasedit-afa-${reportClass}-${notasEditBimester}.csv`,
                   buildNotasEditCsv(notasEditRows),
                   "text/csv;charset=utf-8",
                 );
@@ -4100,7 +4738,7 @@ export default function App() {
 
               function exportNotasEditJSON() {
                 downloadFile(
-                  `notasedit-afa-${reportClass}-${reportPeriod}.json`,
+                  `notasedit-afa-${reportClass}-${notasEditBimester}.json`,
                   buildNotasEditJson(notasEditRows),
                   "application/json",
                 );
@@ -4142,7 +4780,7 @@ export default function App() {
                         <label htmlFor="rep-period">Período</label>
                         <select id="rep-period" value={reportPeriod} onChange={(e) => setReportPeriod(e.target.value as any)}>
                           <option value="mes">Mês Atual</option>
-                          <option value="bimestre">Bimestre (Últimos 60 dias)</option>
+                          <option value="bimestre">Bimestre selecionado</option>
                           <option value="semestre">Semestre Atual</option>
                           <option value="todo">Histórico Completo</option>
                         </select>
@@ -4286,6 +4924,10 @@ export default function App() {
                     </div>
 
                     <div className="notasedit-summary">
+                      <div className="vistos-metric-card">
+                        <span>Bimestre-base</span>
+                        <strong>{getNotasEditBimesterLabel(notasEditBimester)}</strong>
+                      </div>
                       <div className="vistos-metric-card">
                         <span>Alunos</span>
                         <strong>{notasEditRows.length}</strong>
@@ -4786,6 +5428,160 @@ export default function App() {
               <button className="primary" onClick={confirmImport}>
                 <Check size={16} />
                 Importar {importPreview.length}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {audioAfaOpen && selectedStudent && (
+        <div className="modal-backdrop">
+          <section className="modal audio-afa-modal" role="dialog" aria-modal="true" aria-label="Ditado AFA">
+            <div className="modal-header">
+              <div>
+                <h2>Ditado AFA</h2>
+                <p>{selectedStudent.name} - {selectedStudent.className || "Sem turma"}</p>
+              </div>
+              <button className="icon-button" onClick={closeAudioAfa} title="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="audio-mode-toggle" aria-label="Modo de processamento">
+              <button
+                type="button"
+                className={audioMode === "api" ? "selected" : ""}
+                disabled={audioRecording || audioProcessing}
+                onClick={() => setAudioMode("api")}
+              >
+                <Cloud size={15} />
+                API
+              </button>
+              <button
+                type="button"
+                className={audioMode === "gratis" ? "selected" : ""}
+                disabled={audioRecording || audioProcessing}
+                onClick={() => {
+                  setAudioMode("gratis");
+                  if (!audioFreeSupported) setAudioError("Ditado gratis depende do Chrome/Android ou navegador compativel.");
+                }}
+              >
+                <Mic size={15} />
+                Gratis
+              </button>
+              <button
+                type="button"
+                className={audioMode === "local" ? "selected" : ""}
+                disabled={audioRecording || audioProcessing}
+                onClick={() => setAudioMode("local")}
+              >
+                <Settings size={15} />
+                Local
+              </button>
+            </div>
+            <p className="audio-mode-hint">
+              {audioMode === "api"
+                ? "Transcreve e organiza pela OpenAI. Se houver erro de credito, usa fallback local quando houver texto."
+                : audioMode === "gratis"
+                  ? audioFreeSupported
+                    ? "Usa o ditado do navegador e depois organiza por regras locais, sem custo de API."
+                    : "Este navegador nao liberou ditado gratis. Use Chrome/Android ou cole o texto no modo local."
+                  : "Nao envia nada para API. Cole a transcricao e organize por regras locais."}
+            </p>
+
+            <div className="audio-recorder">
+              <button
+                className={audioRecording ? "danger" : "primary"}
+                type="button"
+                onClick={audioRecording ? stopAudioRecording : startAudioRecording}
+                disabled={audioProcessing || (audioMode === "gratis" && !audioFreeSupported)}
+              >
+                {audioRecording ? <Square size={16} /> : <Mic size={16} />}
+                {audioRecording
+                  ? audioMode === "gratis"
+                    ? "Parar ditado"
+                    : "Parar gravacao"
+                  : audioMode === "gratis"
+                    ? "Ditado gratis"
+                    : audioMode === "local"
+                      ? "Cole texto"
+                      : "Gravar audio"}
+              </button>
+              <span className={audioRecording ? "recording-status active" : "recording-status"}>
+                <span />
+                {audioRecording ? "Gravando" : audioProcessing ? "Processando" : audioMode === "gratis" && !audioFreeSupported ? "Indisponivel" : "Pronto"}
+              </span>
+            </div>
+
+            <label className="audio-transcript">
+              <span>Transcricao ou observacao digitada</span>
+              <textarea
+                value={audioTranscript}
+                onChange={(event) => setAudioTranscript(event.target.value)}
+                placeholder="Ex.: O aluno tem participado mais, mas ainda se dispersa em explicacoes longas..."
+              />
+            </label>
+
+            {audioError && (
+              <div className="audio-error">
+                <AlertTriangle size={16} />
+                {audioError}
+              </div>
+            )}
+
+            <div className="actions">
+              <button type="button" onClick={organizeAudioTranscript} disabled={audioProcessing || !audioTranscript.trim()}>
+                <Sparkles size={16} />
+                Organizar texto
+              </button>
+              <label className="compact-select">
+                Aplicar
+                <select value={audioApplyMode} onChange={(event) => setAudioApplyMode(event.target.value as AfaAudioApplyMode)}>
+                  <option value="merge">Mesclar</option>
+                  <option value="replace">Substituir</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="audio-preview">
+              <div className="audio-preview-header">
+                <strong>Previa do rascunho</strong>
+                {audioDraft?.alertLevel && <span>{alertLabels[audioDraft.alertLevel]}</span>}
+              </div>
+              {audioDraft ? (
+                <>
+                  <div className="audio-preview-grid">
+                    {afaAudioProfileFields
+                      .filter((field) => audioDraft.profile[field])
+                      .map((field) => (
+                        <div className="audio-preview-item" key={field}>
+                          <span>{afaAudioProfileLabels[field]}</span>
+                          <p>{audioDraft.profile[field]}</p>
+                        </div>
+                      ))}
+                  </div>
+                  {(audioDraft.tags.length > 0 || audioDraft.incidents.length > 0) && (
+                    <div className="audio-preview-meta">
+                      {audioDraft.tags.length > 0 && <p>Tags: {audioDraft.tags.join(", ")}</p>}
+                      {audioDraft.incidents.length > 0 && (
+                        <p>Ocorrencias: {audioDraft.incidents.map((incident) => incident.title).join(", ")}</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty-list">
+                  <strong>Nenhum rascunho ainda</strong>
+                  <span>Grave um audio ou organize o texto digitado.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="actions">
+              <button type="button" onClick={closeAudioAfa}>Cancelar</button>
+              <button className="primary" type="button" onClick={applyAudioDraft} disabled={!audioDraft || audioProcessing}>
+                <Check size={16} />
+                Aplicar na ficha
               </button>
             </div>
           </section>

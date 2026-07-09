@@ -4,6 +4,7 @@ import {
   buildNotasEditRows,
   calculateNotasEditBehaviorGrade,
   calculateNotasEditVistosGrade,
+  getCurrentNotasEditBimester,
   parseNotasEditImport,
 } from "./notasEdit";
 import { VirtualCheckEntry } from "../types";
@@ -72,6 +73,22 @@ describe("NotasEdit behavior grade", () => {
     expect(calculateNotasEditBehaviorGrade(positive, "semestre", now).behaviorScore).toBeGreaterThan(
       calculateNotasEditBehaviorGrade(attention, "semestre", now).behaviorScore,
     );
+  });
+
+  it("uses the selected school bimester instead of the last 60 days", () => {
+    const student = createStudent({ name: "Rafa", className: "7A" });
+    student.incidents = [
+      { id: "old", date: "2026-04-10", type: "pedagogico", title: "Pendencia antiga", notes: "" },
+      { id: "current", date: "2026-07-10", type: "positivo", title: "Boa postura", notes: "" },
+    ];
+
+    const now = new Date("2026-07-15T12:00:00.000Z");
+    const grade = calculateNotasEditBehaviorGrade(student, "bimestre", now, "b3");
+
+    expect(getCurrentNotasEditBimester(now)).toBe("b3");
+    expect(grade.positiveIncidents).toBe(1);
+    expect(grade.attentionIncidents).toBe(0);
+    expect(grade.behaviorScore).toBeGreaterThan(1.8);
   });
 });
 

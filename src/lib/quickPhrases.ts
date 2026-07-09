@@ -25,6 +25,27 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "o foco atual é consolidar avanços e reduzir oscilações no comportamento",
       ],
     },
+    {
+      title: "Panorama geral",
+      phrases: [
+        "apresenta bom potencial, mas precisa transformar orientações em rotina",
+        "tem evoluído quando recebe acompanhamento próximo e devolutivas objetivas",
+        "oscila entre momentos de bom rendimento e períodos de dispersão",
+        "demonstra necessidade de fortalecer autonomia, organização e constância",
+        "responde melhor quando as combinações são retomadas de forma individual",
+        "vem apresentando sinais de amadurecimento na postura escolar",
+      ],
+    },
+    {
+      title: "Tom para família",
+      phrases: [
+        "a família pode ajudar reforçando rotina, prazos e responsabilidade com materiais",
+        "a escola seguirá acompanhando a evolução nas próximas semanas",
+        "os avanços precisam ser mantidos com constância e reforço positivo",
+        "o acompanhamento deve observar comportamento, participação e entregas",
+        "a prioridade é reduzir recorrências e consolidar atitudes positivas",
+      ],
+    },
   ],
   personalidade: [
     {
@@ -45,6 +66,26 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "demonstra sensibilidade a correções públicas",
         "mantém boa escuta quando está concentrado(a)",
         "precisa fortalecer autocontrole em situações de frustração",
+      ],
+    },
+    {
+      title: "Ritmo pessoal",
+      phrases: [
+        "tem ritmo mais lento para iniciar e finalizar as propostas",
+        "precisa de tempo para organizar ideias antes de responder",
+        "demonstra pressa e precisa revisar com mais cuidado",
+        "alterna momentos de autonomia com necessidade de mediação",
+        "fica mais seguro(a) quando entende as etapas da atividade",
+      ],
+    },
+    {
+      title: "Autorregulação",
+      phrases: [
+        "precisa desenvolver estratégias para lidar com frustração",
+        "demonstra impulsividade em momentos de maior agitação",
+        "consegue retomar a postura quando orientado(a) de forma objetiva",
+        "beneficia-se de pausas breves e retomada dos combinados",
+        "precisa fortalecer tolerância à espera e aos limites coletivos",
       ],
     },
   ],
@@ -71,6 +112,27 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "aceita melhor as orientações propostas",
       ],
     },
+    {
+      title: "Forças de aprendizagem",
+      phrases: [
+        "demonstra boa compreensão quando acompanha a explicação",
+        "faz boas contribuições quando está envolvido(a)",
+        "apresenta curiosidade diante de novos temas",
+        "consegue avançar bem quando segue as etapas propostas",
+        "mostra repertório e criatividade em algumas produções",
+        "aprende melhor com exemplos práticos e orientação direta",
+      ],
+    },
+    {
+      title: "Atitudes em sala",
+      phrases: [
+        "cuida dos materiais e do espaço coletivo",
+        "demonstra respeito nas interações com adultos",
+        "aceita combinados e tenta colocá-los em prática",
+        "tem boa disposição para ajudar colegas",
+        "valoriza devolutivas e busca melhorar o desempenho",
+      ],
+    },
   ],
   atencao: [
     {
@@ -95,6 +157,27 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "merece alinhamento com a família",
       ],
     },
+    {
+      title: "Foco e rotina",
+      phrases: [
+        "perde o foco quando a atividade exige mais tempo de concentração",
+        "necessita de lembretes para iniciar a proposta",
+        "deixa etapas incompletas mesmo após orientação",
+        "precisa registrar melhor tarefas, prazos e materiais",
+        "oscila na rotina e precisa de acompanhamento mais constante",
+        "apresenta dificuldade para retomar a atividade após interrupções",
+      ],
+    },
+    {
+      title: "Postura em aula",
+      phrases: [
+        "interrompe explicações em momentos inadequados",
+        "tem dificuldade em aguardar sua vez de fala",
+        "reage com resistência quando contrariado(a)",
+        "precisa respeitar melhor os combinados coletivos",
+        "necessita melhorar a escuta durante orientações gerais",
+      ],
+    },
   ],
   social: [
     {
@@ -115,6 +198,26 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "beneficia-se de mediação para resolver conflitos",
         "tem boa relação com o professor",
         "precisa desenvolver comunicação mais respeitosa em momentos de tensão",
+      ],
+    },
+    {
+      title: "Integração",
+      phrases: [
+        "prefere interações com poucos colegas",
+        "tem dificuldade para se integrar a grupos maiores",
+        "aproxima-se melhor quando a atividade tem papéis definidos",
+        "precisa ser incentivado(a) a participar de dinâmicas coletivas",
+        "demonstra vínculo positivo com alguns colegas específicos",
+      ],
+    },
+    {
+      title: "Conflitos e mediação",
+      phrases: [
+        "envolve-se em conflitos quando há disputa de espaço ou fala",
+        "precisa aprender a resolver divergências sem elevar o tom",
+        "responde melhor quando a mediação ocorre logo após o episódio",
+        "necessita reconhecer o impacto de suas falas nas relações",
+        "tem avançado na aceitação de combinados de convivência",
       ],
     },
   ],
@@ -139,6 +242,28 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "tem apresentado oscilação na entrega das atividades",
       ],
     },
+    {
+      title: "Produção e registro",
+      phrases: [
+        "precisa melhorar a qualidade dos registros no caderno",
+        "tem dificuldade para copiar e organizar informações essenciais",
+        "realiza parte da proposta, mas nem sempre finaliza",
+        "necessita revisar respostas antes de entregar",
+        "apresenta melhora quando recebe modelo ou exemplo inicial",
+        "precisa transformar participação oral em registro escrito",
+      ],
+    },
+    {
+      title: "Estratégias de aprendizagem",
+      phrases: [
+        "beneficia-se de atividades por etapas curtas",
+        "precisa reler enunciados antes de pedir ajuda",
+        "tem melhor desempenho com acompanhamento individual",
+        "necessita fortalecer hábito de estudo fora da sala",
+        "demonstra dificuldade em manter sequência lógica nas respostas",
+        "avança quando recebe feedback imediato sobre o erro",
+      ],
+    },
   ],
   manter: [
     {
@@ -150,6 +275,26 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "manter os avanços na convivência",
         "manter o esforço para concluir as tarefas",
         "manter a abertura para receber orientações",
+      ],
+    },
+    {
+      title: "Hábitos positivos",
+      phrases: [
+        "manter a pontualidade nas entregas",
+        "manter a escuta durante explicações",
+        "manter o cuidado com os registros",
+        "manter a iniciativa para pedir ajuda quando necessário",
+        "manter a cooperação em atividades coletivas",
+        "manter a evolução observada no bimestre",
+      ],
+    },
+    {
+      title: "Postura e convivência",
+      phrases: [
+        "manter comunicação respeitosa com colegas",
+        "manter controle emocional em situações de frustração",
+        "manter a disposição para rever combinados",
+        "manter vínculos positivos construídos com o grupo",
       ],
     },
   ],
@@ -176,6 +321,27 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "registrar nova devolutiva",
       ],
     },
+    {
+      title: "Rotina e autonomia",
+      phrases: [
+        "organizar materiais antes do início das aulas",
+        "anotar tarefas e prazos com mais cuidado",
+        "iniciar atividades com menos dependência de lembretes",
+        "finalizar as propostas dentro do tempo combinado",
+        "revisar respostas antes de entregar",
+        "trazer dúvidas de forma mais objetiva",
+      ],
+    },
+    {
+      title: "Convivência e postura",
+      phrases: [
+        "respeitar melhor os turnos de fala",
+        "reduzir interrupções durante explicações",
+        "resolver conflitos com diálogo e mediação",
+        "aceitar correções sem resistência excessiva",
+        "controlar impulsos em momentos de agitação",
+      ],
+    },
   ],
   apoioFamilia: [
     {
@@ -188,6 +354,26 @@ export const profilePhraseBank: Record<keyof StudentProfile, PhraseGroup[]> = {
         "valorizar os avanços observados",
         "ajudar a criar horário regular de estudo",
         "orientar sobre responsabilidade com prazos e materiais",
+      ],
+    },
+    {
+      title: "Acompanhamento em casa",
+      phrases: [
+        "conferir agenda, materiais e tarefas ao longo da semana",
+        "combinar horário fixo para estudo e revisão",
+        "evitar deixar tarefas acumularem para o último momento",
+        "acompanhar se os registros no caderno estão completos",
+        "reforçar a importância de trazer dúvidas para a aula",
+      ],
+    },
+    {
+      title: "Parceria escola-família",
+      phrases: [
+        "manter contato com a escola se houver recorrência",
+        "alinhar combinados de comportamento entre casa e escola",
+        "valorizar pequenas melhoras para fortalecer a motivação",
+        "acompanhar as próximas devolutivas do bimestre",
+        "reforçar postura respeitosa e responsabilidade com prazos",
       ],
     },
   ],
@@ -214,6 +400,38 @@ export const incidentPhraseBank: PhraseGroup[] = [
       "responsável deve ser informado se houver recorrência",
       "acompanhar evolução nas próximas aulas",
       "orientação pedagógica registrada",
+    ],
+  },
+  {
+    title: "Ocorrências positivas",
+    phrases: [
+      "demonstrou melhora na postura durante a aula",
+      "concluiu a atividade com autonomia",
+      "ajudou colega de forma respeitosa",
+      "aceitou orientação e retomou a atividade",
+      "participou com boa contribuição oral",
+      "manteve foco durante a proposta",
+    ],
+  },
+  {
+    title: "Ocorrências de atenção",
+    phrases: [
+      "precisou de lembrete para respeitar combinados",
+      "não concluiu a atividade proposta",
+      "apresentou dispersão recorrente",
+      "interrompeu explicações em momentos inadequados",
+      "necessitou de mediação após conflito",
+      "não trouxe material necessário",
+    ],
+  },
+  {
+    title: "Encaminhamentos",
+    phrases: [
+      "retomar combinados na próxima aula",
+      "observar se haverá repetição do comportamento",
+      "registrar nova devolutiva se persistir",
+      "orientar família caso haja recorrência",
+      "acompanhar entrega da próxima atividade",
     ],
   },
 ];

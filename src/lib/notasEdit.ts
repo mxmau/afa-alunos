@@ -1,5 +1,7 @@
 import { NotasEditPeriod, NotasEditStudentGrades, Student, VirtualCheckEntry } from "../types";
 
+export type NotasEditBimester = "b1" | "b2" | "b3" | "b4";
+
 export type NotasEditExportRow = {
   studentId: string;
   name: string;
@@ -69,19 +71,37 @@ const attentionBehaviorWords = [
 
 export function getPeriodLabel(period: NotasEditPeriod): string {
   if (period === "mes") return "mes atual";
-  if (period === "bimestre") return "ultimos 60 dias";
+  if (period === "bimestre") return "bimestre selecionado";
   if (period === "semestre") return "semestre atual";
   return "historico completo";
+}
+
+export function getCurrentNotasEditBimester(now = new Date()): NotasEditBimester {
+  const month = now.getMonth();
+  if (month <= 2) return "b1";
+  if (month <= 5) return "b2";
+  if (month <= 8) return "b3";
+  return "b4";
+}
+
+export function getNotasEditBimesterLabel(bimester: NotasEditBimester) {
+  return {
+    b1: "1º bimestre",
+    b2: "2º bimestre",
+    b3: "3º bimestre",
+    b4: "4º bimestre",
+  }[bimester];
 }
 
 export function filterVistosByPeriod(
   vistos: VirtualCheckEntry[],
   period: NotasEditPeriod,
   now = new Date(),
+  bimester?: NotasEditBimester,
 ): VirtualCheckEntry[] {
-  const start = getPeriodStart(period, now);
-  if (!start) return vistos;
-  return vistos.filter((visto) => parseDateOnly(visto.date) >= start);
+  const range = getPeriodRange(period, now, bimester);
+  if (!range) return vistos;
+  return vistos.filter((visto) => isDateInRange(parseDateOnly(visto.date), range));
 }
 
 export function calculateNotasEditVistosGrade(completedVistos: number, expectedVistos: number) {
@@ -99,6 +119,7 @@ export function calculateNotasEditBehaviorGrade(
   student: Student,
   period: NotasEditPeriod,
   now = new Date(),
+  bimester?: NotasEditBimester,
 ) {
   const baseByAlert = {
     tranquilo: 1.8,
@@ -107,9 +128,9 @@ export function calculateNotasEditBehaviorGrade(
     prioridade: 0.7,
   } as const;
 
-  const start = getPeriodStart(period, now);
-  const incidents = start
-    ? student.incidents.filter((incident) => parseDateOnly(incident.date) >= start)
+  const range = getPeriodRange(period, now, bimester);
+  const incidents = range
+    ? student.incidents.filter((incident) => isDateInRange(parseDateOnly(incident.date), range))
     : student.incidents;
 
   const positiveIncidents = incidents.filter((incident) => incident.type === "positivo").length;
@@ -163,7 +184,7 @@ export function calculateNotasEditBehaviorGrade(
 
 export function buildNotasEditRows(
   students: Student[],
-  options: { period: NotasEditPeriod; classFilter?: string; now?: Date },
+  options: { period: NotasEditPeriod; classFilter?: string; now?: Date; bimester?: NotasEditBimester },
 ): NotasEditExportRow[] {
   const now = options.now ?? new Date();
   const classFilter = options.classFilter ?? "todas";
@@ -171,10 +192,10 @@ export function buildNotasEditRows(
 
   return filteredStudents
     .map((student) => {
-      const periodVistos = filterVistosByPeriod(student.vistos ?? [], options.period, now);
+      const periodVistos = filterVistosByPeriod(student.vistos ?? [], options.period, now, options.bimester);
       const completedVistos = periodVistos.filter((visto) => visto.value > 0).length;
-      const expectedVistos = countExpectedVistosForStudent(students, student, options.period, now);
-      const behavior = calculateNotasEditBehaviorGrade(student, options.period, now);
+      const expectedVistos = countExpectedVistosForStudent(students, student, options.period, now, options.bimester);
+      const behavior = calculateNotasEditBehaviorGrade(student, options.period, now, options.bimester);
 
       return {
         studentId: student.id,
@@ -305,11 +326,12 @@ function countExpectedVistosForStudent(
   student: Student,
   period: NotasEditPeriod,
   now: Date,
+  bimester?: NotasEditBimester,
 ): number {
   const sessionIds = new Set<string>();
   students
     .filter((candidate) => candidate.className === student.className)
-    .flatMap((candidate) => filterVistosByPeriod(candidate.vistos ?? [], period, now))
+    .flatMap((candidate) => filterVistosByPeriod(candidate.vistos ?? [], period, now, bimester))
     .forEach((visto) => {
       if (visto.sessionId) sessionIds.add(visto.sessionId);
     });
@@ -375,19 +397,37 @@ function splitCsvLine(line: string, separator: string): string[] {
   return values.map((value) => value.replace(/^"|"$/g, "").replace(/""/g, "\""));
 }
 
-function getPeriodStart(period: NotasEditPeriod, now: Date): Date | null {
+function getPeriodRange(period: NotasEditPeriod, now: Date, bimester?: NotasEditBimester): { start: Date; end?: Date } | null {
   if (period === "todo") return null;
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   if (period === "mes") {
-    start.setUTCDate(1);
-    return start;
+    return { start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) };
   }
   if (period === "bimestre") {
-    start.setUTCDate(start.getUTCDate() - 60);
-    return start;
+    return getBimesterRange(bimester ?? getCurrentNotasEditBimester(now), now);
   }
   const semesterStartMonth = now.getUTCMonth() < 6 ? 0 : 6;
-  return new Date(Date.UTC(now.getUTCFullYear(), semesterStartMonth, 1));
+  return { start: new Date(Date.UTC(now.getUTCFullYear(), semesterStartMonth, 1)) };
+}
+
+function getBimesterRange(bimester: NotasEditBimester, now: Date) {
+  const year = now.getUTCFullYear();
+  const startMonthByBimester: Record<NotasEditBimester, number> = {
+    b1: 0,
+    b2: 3,
+    b3: 6,
+    b4: 9,
+  };
+  const startMonth = startMonthByBimester[bimester];
+  return {
+    start: new Date(Date.UTC(year, startMonth, 1)),
+    end: new Date(Date.UTC(year, startMonth + 3, 1)),
+  };
+}
+
+function isDateInRange(date: Date, range: { start: Date; end?: Date }) {
+  if (date < range.start) return false;
+  if (range.end && date >= range.end) return false;
+  return true;
 }
 
 function parseDateOnly(value: string): Date {

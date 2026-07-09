@@ -22,8 +22,16 @@ export interface SyncLog {
   createdAt: string;
 }
 
+export interface PendingAfaAudio {
+  studentId: string;
+  blob: Blob;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
 const DB_NAME = "afa_alunos_offline_db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbInstance: IDBDatabase | null = null;
 
@@ -64,7 +72,41 @@ export function getDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("app_config")) {
         db.createObjectStore("app_config", { keyPath: "key" });
       }
+
+      if (!db.objectStoreNames.contains("pending_afa_audio")) {
+        db.createObjectStore("pending_afa_audio", { keyPath: "studentId" });
+      }
     };
+  });
+}
+
+export async function savePendingAfaAudio(audio: PendingAfaAudio): Promise<void> {
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("pending_afa_audio", "readwrite");
+    const request = tx.objectStore("pending_afa_audio").put(audio);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getPendingAfaAudio(studentId: string): Promise<PendingAfaAudio | null> {
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("pending_afa_audio", "readonly");
+    const request = tx.objectStore("pending_afa_audio").get(studentId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function deletePendingAfaAudio(studentId: string): Promise<void> {
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("pending_afa_audio", "readwrite");
+    const request = tx.objectStore("pending_afa_audio").delete(studentId);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
   });
 }
 

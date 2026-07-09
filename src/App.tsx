@@ -70,9 +70,13 @@ import {
   getPendingOperations,
   updateOfflineOperation,
   deleteOfflineOperation,
+  deletePendingAfaAudio,
+  getPendingAfaAudio,
   addSyncLog,
   getSyncLogs,
   OfflineOperation,
+  PendingAfaAudio,
+  savePendingAfaAudio,
 } from "./lib/offlineDb";
 import {
   triggerSync,
@@ -694,6 +698,8 @@ export default function App() {
   const [audioDraft, setAudioDraft] = useState<AfaAudioDraft | null>(null);
   const [audioError, setAudioError] = useState("");
   const [audioDebugLog, setAudioDebugLog] = useState("");
+  const [pendingAfaAudio, setPendingAfaAudio] = useState<PendingAfaAudio | null>(null);
+  const [pendingAfaAudioUrl, setPendingAfaAudioUrl] = useState("");
   const [audioFreeSupported, setAudioFreeSupported] = useState(false);
   const [audioExpressionChips, setAudioExpressionChips] = useState<AudioExpressionChip[]>(() => {
     try {
@@ -1499,6 +1505,38 @@ export default function App() {
 
   const selectedStudent = students.find((student) => student.id === selectedId) ?? students[0];
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!audioAfaOpen || !selectedStudent) {
+      setPendingAfaAudio(null);
+      return;
+    }
+
+    void getPendingAfaAudio(selectedStudent.id)
+      .then((audio) => {
+        if (!cancelled) setPendingAfaAudio(audio);
+      })
+      .catch(() => {
+        if (!cancelled) setAudioError("Nao consegui consultar os audios pendentes deste aparelho.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [audioAfaOpen, selectedStudent?.id]);
+
+  useEffect(() => {
+    if (!pendingAfaAudio) {
+      setPendingAfaAudioUrl("");
+      return;
+    }
+
+    const url = URL.createObjectURL(pendingAfaAudio.blob);
+    setPendingAfaAudioUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pendingAfaAudio]);
+
   // State to hold the editable auto-generated seen recommendation comment
   const [editedVistosPhrase, setEditedVistosPhrase] = useState("");
 
@@ -2241,7 +2279,7 @@ export default function App() {
 
   function applyAudioDraftFromTranscript(transcript: string, source: "api" | "local" | "gratis", draft?: AfaAudioDraft) {
     const cleanTranscript = transcript.trim();
-    if (!cleanTranscript) return;
+    if (!cleanTranscript) return false;
     const nextDraft = draft || buildLocalAudioDraft(cleanTranscript);
     setAudioTranscript(cleanTranscript);
     setAudioDraft(nextDraft);
@@ -2250,6 +2288,7 @@ export default function App() {
       setAudioError("");
       setAudioDebugLog("");
     }
+    return true;
   }
 
   function insertAudioChipText(text: string) {
@@ -2348,8 +2387,31 @@ export default function App() {
     });
   }
 
-  async function requestAfaAudioDraft(options: { audioBlob?: Blob; transcript?: string }) {
+  async function keepPendingAfaAudio(blob: Blob) {
     if (!selectedStudent) return;
+    const pendingAudio: PendingAfaAudio = {
+      studentId: selectedStudent.id,
+      blob,
+      mimeType: blob.type || "audio/webm",
+      size: blob.size,
+      createdAt: new Date().toISOString(),
+    };
+    await savePendingAfaAudio(pendingAudio);
+    setPendingAfaAudio(pendingAudio);
+  }
+
+  async function discardPendingAfaAudio(studentId = selectedStudent?.id) {
+    if (!studentId) return;
+    setPendingAfaAudio((current) => (current?.studentId === studentId ? null : current));
+    try {
+      await deletePendingAfaAudio(studentId);
+    } catch {
+      setAudioError("A ficha foi organizada, mas nao consegui apagar o audio pendente deste aparelho.");
+    }
+  }
+
+  async function requestAfaAudioDraft(options: { audioBlob?: Blob; transcript?: string }) {
+    if (!selectedStudent) throw new Error("Selecione um aluno antes de processar o audio.");
 
     if (options.audioBlob && options.audioBlob.size > maxApiAudioUploadBytes) {
       const sizeError = new Error("O audio ficou grande demais para envio direto. Usei o texto capturado no aparelho quando disponivel.") as Error & {
@@ -2414,6 +2476,16 @@ export default function App() {
       requestSummary.transcriptLength = currentTranscript.length;
     }
 
+    if (!currentTranscript.trim()) {
+      const emptyTranscriptError = new Error("A transcricao voltou vazia. O audio foi mantido para uma nova tentativa.") as AfaAudioApiError;
+      emptyTranscriptError.code = "empty_transcript";
+      emptyTranscriptError.status = 422;
+      emptyTranscriptError.endpoint = "/api/afa-transcribe";
+      emptyTranscriptError.request = requestSummary;
+      emptyTranscriptError.transcript = currentTranscript;
+      throw emptyTranscriptError;
+    }
+
     const structureResponse = await fetch("/api/afa-structure", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2450,40 +2522,41 @@ export default function App() {
       throw apiError;
     }
 
-    applyAudioDraftFromTranscript(
+    return applyAudioDraftFromTranscript(
       currentTranscript,
       "api",
       cleanAudioDraft(structureResult.draft),
     );
   }
 
-  async function processAfaAudioBlob(blob: Blob) {
+  async function processAfaAudioBlob(blob: Blob, processingMode: AfaAudioMode = audioMode) {
     setAudioProcessing(true);
     setAudioError("");
     setAudioDebugLog("");
+    let organized = false;
     try {
-      if (audioMode === "local") {
+      if (processingMode === "local") {
         if (!audioTranscript.trim()) {
           throw new Error("No modo local, cole a transcricao antes de organizar a ficha.");
         }
-        applyAudioDraftFromTranscript(audioTranscript, "local");
+        organized = applyAudioDraftFromTranscript(audioTranscript, "local");
         return;
       }
-      if (audioMode === "gratis") {
+      if (processingMode === "gratis") {
         const transcript = audioTranscript.trim();
         if (!transcript) throw new Error("Use o ditado gratis do navegador ou cole a transcricao.");
-        applyAudioDraftFromTranscript(transcript, "gratis");
+        organized = applyAudioDraftFromTranscript(transcript, "gratis");
         return;
       }
-      await requestAfaAudioDraft({ audioBlob: blob });
+      organized = await requestAfaAudioDraft({ audioBlob: blob });
     } catch (error) {
       const apiError = error as AfaAudioApiError;
       const fallbackText = (apiError.transcript || audioTranscript.trim() || speechCurrentTranscriptRef.current.trim()).trim();
-      if (audioMode === "api") {
-        setAudioDebugLog(buildAudioDebugLog(error, { action: "processar_audio_gravado", audioBlob: blob, transcript: fallbackText }));
+      if (processingMode === "api") {
+        setAudioDebugLog(buildAudioDebugLog(error, { action: "processar_audio_gravado", audioBlob: blob, transcript: fallbackText, mode: processingMode }));
       }
       if (fallbackText) {
-        applyAudioDraftFromTranscript(fallbackText, "local");
+        organized = applyAudioDraftFromTranscript(fallbackText, "local");
         if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
         setAudioError(
           error instanceof Error
@@ -2507,8 +2580,15 @@ export default function App() {
         }
       }
     } finally {
+      if (organized) await discardPendingAfaAudio();
       setAudioProcessing(false);
     }
+  }
+
+  function retryPendingAfaAudio() {
+    if (!pendingAfaAudio || audioProcessing) return;
+    setAudioMode("api");
+    void processAfaAudioBlob(pendingAfaAudio.blob, "api");
   }
 
   async function startAudioRecording() {
@@ -2544,7 +2624,14 @@ export default function App() {
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         recorder.stream.getTracks().forEach((track) => track.stop());
         mediaRecorderRef.current = null;
-        void processAfaAudioBlob(audioBlob);
+        void (async () => {
+          try {
+            await keepPendingAfaAudio(audioBlob);
+          } catch {
+            setAudioError("Nao consegui guardar o audio neste aparelho. Mantenha esta tela aberta durante o processamento.");
+          }
+          await processAfaAudioBlob(audioBlob);
+        })();
       };
       recorder.start();
       setAudioRecording(true);
@@ -2720,7 +2807,8 @@ export default function App() {
 
     const transcript = speechCurrentTranscriptRef.current.trim() || audioTranscript.trim();
     if (organizeDraft && transcript) {
-      applyAudioDraftFromTranscript(transcript, "gratis");
+      const organized = applyAudioDraftFromTranscript(transcript, "gratis");
+      if (organized) void discardPendingAfaAudio();
     }
   }
 
@@ -2734,14 +2822,15 @@ export default function App() {
     setAudioProcessing(true);
     setAudioError("");
     setAudioDebugLog("");
+    let organized = false;
     try {
       if (audioMode === "api") {
-        await requestAfaAudioDraft({ transcript });
+        organized = await requestAfaAudioDraft({ transcript });
       } else {
-        applyAudioDraftFromTranscript(transcript, audioMode);
+        organized = applyAudioDraftFromTranscript(transcript, audioMode);
       }
     } catch (error) {
-      applyAudioDraftFromTranscript(transcript, "local");
+      organized = applyAudioDraftFromTranscript(transcript, "local");
       if (audioMode === "api") {
         setAudioDebugLog(buildAudioDebugLog(error, { action: "organizar_transcricao_digitada", transcript }));
       }
@@ -2752,6 +2841,7 @@ export default function App() {
           : "Usei as regras locais como fallback.",
       );
     } finally {
+      if (organized) await discardPendingAfaAudio();
       setAudioProcessing(false);
     }
   }
@@ -2883,6 +2973,8 @@ export default function App() {
 
     // Excluir localmente e enfileirar sync
     await deleteStudentLocal(selectedStudent.id);
+    await deletePendingAfaAudio(selectedStudent.id).catch(() => undefined);
+    setPendingAfaAudio((current) => (current?.studentId === selectedStudent.id ? null : current));
     await queueOfflineOperation({
       entityType: "student",
       entityId: selectedStudent.id,
@@ -5927,6 +6019,23 @@ export default function App() {
                 {audioRecording ? "Gravando" : audioProcessing ? "Processando" : audioMode === "gratis" && !audioFreeSupported ? "Indisponivel" : "Pronto"}
               </span>
             </div>
+
+            {pendingAfaAudio && (
+              <div className="pending-audio-panel">
+                <div className="pending-audio-heading">
+                  <div>
+                    <strong>Audio pendente</strong>
+                    <span>{Math.max(1, Math.round(pendingAfaAudio.size / 1024))} KB guardados neste aparelho</span>
+                  </div>
+                  <button type="button" className="primary" onClick={retryPendingAfaAudio} disabled={audioProcessing || audioRecording}>
+                    <Upload size={15} />
+                    Enviar novamente
+                  </button>
+                </div>
+                {pendingAfaAudioUrl && <audio controls preload="metadata" src={pendingAfaAudioUrl} />}
+                <small>Ele sera excluido automaticamente quando a transcricao organizar a ficha.</small>
+              </div>
+            )}
 
             <label className="audio-transcript">
               <span>Transcricao ou observacao digitada</span>

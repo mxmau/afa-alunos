@@ -1239,6 +1239,39 @@ textarea:focus {
   gap: 10px;
 }
 
+.pending-audio-panel {
+  background: #f6f9f4;
+  border: 1px solid #b7cbb1;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.pending-audio-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.pending-audio-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.pending-audio-heading span,
+.pending-audio-panel small {
+  color: #5c6b61;
+  font-size: 0.8rem;
+}
+
+.pending-audio-panel audio {
+  height: 42px;
+  max-width: 100%;
+  width: 100%;
+}
+
 .recording-status {
   align-items: center;
   color: var(--muted);

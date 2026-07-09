@@ -68,6 +68,10 @@ function sanitizeDraft(input) {
     ? [...new Set(draft.tags.map((tag) => compactText(tag, 36).toLocaleLowerCase("pt-BR")).filter(Boolean))].slice(0, 8)
     : [];
 
+  const chips = Array.isArray(draft.chips)
+    ? [...new Set(draft.chips.map((chip) => compactText(chip, 60)).filter(Boolean))].slice(0, 4)
+    : [];
+
   const incidents = Array.isArray(draft.incidents)
     ? draft.incidents
         .map((incident) => {
@@ -89,6 +93,7 @@ function sanitizeDraft(input) {
     profile,
     alertLevel: ALERT_LEVELS.has(draft.alertLevel) ? draft.alertLevel : undefined,
     tags,
+    chips,
     incidents,
   };
 }
@@ -161,12 +166,12 @@ export async function handler(event) {
           {
             role: "system",
             content:
-              "Voce organiza observacoes escolares em portugues brasileiro. Retorne somente JSON valido, sem markdown. Nao invente fatos. Use frases curtas, objetivas e adequadas para conversa com familia. Se algo for incerto, escreva como observacao, nao como diagnostico.",
+              "Voce organiza observacoes escolares em portugues brasileiro. Retorne somente JSON valido, sem markdown. Nao invente fatos. Use frases curtas e adequadas para conversa com familia. Extraia no array 'chips' de 2 a 4 comportamentos ou acoes curtas e ageis mencionadas no audio (ex: 'brinca com responsabilidade', 'registra as atividades').",
           },
           {
             role: "user",
             content:
-              "Monte um rascunho AFA com este formato exato: {\"profile\":{\"resumoRapido\":\"\",\"personalidade\":\"\",\"positivos\":\"\",\"atencao\":\"\",\"social\":\"\",\"pedagogico\":\"\",\"melhorar\":\"\",\"manter\":\"\",\"apoioFamilia\":\"\"},\"alertLevel\":\"tranquilo|observacao|atencao|prioridade\",\"tags\":[\"\"],\"incidents\":[{\"type\":\"positivo|observacao|familia|pedagogico|social\",\"title\":\"\",\"notes\":\"\"}]}. Dados: " +
+              "Monte um rascunho AFA com este formato exato: {\"profile\":{\"resumoRapido\":\"\",\"personalidade\":\"\",\"positivos\":\"\",\"atencao\":\"\",\"social\":\"\",\"pedagogico\":\"\",\"melhorar\":\"\",\"manter\":\"\",\"apoioFamilia\":\"\"},\"alertLevel\":\"tranquilo|observacao|atencao|prioridade\",\"tags\":[\"\"],\"chips\":[\"\"],\"incidents\":[{\"type\":\"positivo|observacao|familia|pedagogico|social\",\"title\":\"\",\"notes\":\"\"}]}. Dados: " +
               JSON.stringify(prompt),
           },
         ],

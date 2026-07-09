@@ -256,6 +256,7 @@ type AfaAudioDraft = {
   profile: Partial<StudentProfile>;
   alertLevel?: AlertLevel;
   tags: string[];
+  chips?: string[];
   incidents: Array<{
     type: Incident["type"];
     title: string;
@@ -427,6 +428,7 @@ function buildLocalAudioDraft(transcript: string): AfaAudioDraft {
     profile,
     alertLevel: inferAudioAlertLevel(normalized),
     tags,
+    chips: extractAudioExpressionCandidates(transcript),
     incidents: [
       {
         type: attention ? "observacao" : "positivo",
@@ -453,6 +455,9 @@ function cleanAudioDraft(input: unknown): AfaAudioDraft {
   const tags = Array.isArray(source.tags)
     ? [...new Set(source.tags.map((tag) => (typeof tag === "string" ? tag.trim().toLocaleLowerCase("pt-BR") : "")).filter(Boolean))].slice(0, 8)
     : [];
+  const chips = Array.isArray(source.chips)
+    ? [...new Set(source.chips.map((chip) => (typeof chip === "string" ? chip.trim() : "")).filter(Boolean))].slice(0, 4)
+    : [];
   const incidents = Array.isArray(source.incidents)
     ? source.incidents
         .map((incident) => {
@@ -470,7 +475,7 @@ function cleanAudioDraft(input: unknown): AfaAudioDraft {
         .slice(0, 4)
     : [];
 
-  return { profile, alertLevel, tags, incidents };
+  return { profile, alertLevel, tags, chips, incidents };
 }
 
 function getBrowserSpeechRecognition() {
@@ -2178,9 +2183,9 @@ export default function App() {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 8);
 
-  function registerAudioExpressionChips(transcript: string, student = selectedStudent) {
+  function registerAudioExpressionChips(input: string | string[], student = selectedStudent) {
     if (!student) return;
-    const candidates = extractAudioExpressionCandidates(transcript);
+    const candidates = Array.isArray(input) ? input : extractAudioExpressionCandidates(input);
     if (!candidates.length) return;
 
     const now = new Date().toISOString();
@@ -2233,7 +2238,7 @@ export default function App() {
     const nextDraft = draft || buildLocalAudioDraft(cleanTranscript);
     setAudioTranscript(cleanTranscript);
     setAudioDraft(nextDraft);
-    registerAudioExpressionChips(cleanTranscript);
+    registerAudioExpressionChips(nextDraft.chips && nextDraft.chips.length > 0 ? nextDraft.chips : cleanTranscript);
     if (source === "api") {
       setAudioError("");
       setAudioDebugLog("");

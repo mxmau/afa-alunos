@@ -498,6 +498,17 @@ function getAudioExpressionId(value: string) {
   return normalizeAudioExpression(value).replace(/\s+/g, "-").slice(0, 90);
 }
 
+function getAudioChipLabel(value: string) {
+  const words = value
+    .replace(/[.!?,;:]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter(Boolean);
+  const stopWords = new Set(["o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "com", "para", "por", "e", "que"]);
+  const keywords = words.filter((word) => !stopWords.has(normalizeForMatch(word)));
+  return (keywords.length >= 2 ? keywords : words).slice(0, 3).join(" ");
+}
+
 function extractAudioExpressionCandidates(transcript: string) {
   const normalizedInput = transcript.replace(/\s+/g, " ").trim();
   if (!normalizedInput) return [];
@@ -5776,8 +5787,8 @@ export default function App() {
                   <div className="audio-chip-list">
                     {recurringAudioChips.map((chip) => (
                       <div className="audio-chip-pill" key={chip.id}>
-                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title="Inserir na transcricao">
-                          {chip.text}
+                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title={`Inserir: ${chip.text}`}>
+                          {getAudioChipLabel(chip.text)}
                           <small>{chip.count} alunos</small>
                         </button>
                         <button type="button" className="audio-chip-remove" onClick={() => removeAudioChip(chip.id)} title="Remover chip">
@@ -5796,8 +5807,8 @@ export default function App() {
                   <div className="audio-chip-list">
                     {recentAudioChips.map((chip) => (
                       <div className="audio-chip-pill muted" key={chip.id}>
-                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title="Inserir na transcricao">
-                          {chip.text}
+                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title={`Inserir: ${chip.text}`}>
+                          {getAudioChipLabel(chip.text)}
                           <small>{chip.count} aluno</small>
                         </button>
                         <button type="button" className="audio-chip-remove" onClick={() => removeAudioChip(chip.id)} title="Remover chip">

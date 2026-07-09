@@ -2377,9 +2377,10 @@ export default function App() {
     setAudioError("");
     setAudioDraft(null);
     audioChunksRef.current = [];
+    let stream: MediaStream | null = null;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = getSupportedAfaAudioMimeType();
       const options: MediaRecorderOptions = { audioBitsPerSecond: 32000 };
       if (mimeType) options.mimeType = mimeType;
@@ -2391,12 +2392,17 @@ export default function App() {
       recorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         recorder.stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
         void processAfaAudioBlob(audioBlob);
       };
       recorder.start();
       setAudioRecording(true);
       startApiSpeechBackup();
     } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+      stopApiSpeechBackup();
+      setAudioRecording(false);
       setAudioError(error instanceof Error ? error.message : "Nao consegui iniciar a gravacao.");
     }
   }

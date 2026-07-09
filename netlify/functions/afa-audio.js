@@ -72,7 +72,7 @@ function toText(value) {
 
 function compactText(value, maxLength = 900) {
   const text = toText(value).replace(/\s+/g, " ");
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trim()}…` : text;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
 }
 
 function extractOutputText(responseJson) {

@@ -99,6 +99,16 @@ function sanitizeDraft(input) {
   };
 }
 
+function hasDraftContent(draft) {
+  return (
+    Boolean(draft?.alertLevel) ||
+    Object.values(draft?.profile || {}).some(Boolean) ||
+    (Array.isArray(draft?.tags) && draft.tags.length > 0) ||
+    (Array.isArray(draft?.chips) && draft.chips.length > 0) ||
+    (Array.isArray(draft?.incidents) && draft.incidents.length > 0)
+  );
+}
+
 function canUseFreeFallback(error) {
   const status = Number(error?.status || 0);
   const code = String(error?.code || "").toLocaleLowerCase("pt-BR");
@@ -201,7 +211,7 @@ export async function handler(event) {
     };
 
     if (usesCompletionTokens) {
-      requestBody.max_completion_tokens = 700;
+      requestBody.max_completion_tokens = 1400;
     } else {
       requestBody.temperature = 0.2;
       requestBody.max_tokens = 700;
@@ -226,6 +236,13 @@ export async function handler(event) {
 
     const outputText = extractOutputText(result);
     const draft = sanitizeDraft(parseJsonObject(outputText));
+    if (!hasDraftContent(draft)) {
+      const emptyError = new Error("A API nao gerou um rascunho util. Usei o fallback local.");
+      emptyError.status = 502;
+      emptyError.code = "openai_empty_draft";
+      emptyError.fallback = true;
+      throw emptyError;
+    }
 
     return json(200, { transcript, draft, source: "openai" });
   } catch (error) {

@@ -1279,6 +1279,82 @@ textarea:focus {
   resize: vertical;
 }
 
+.audio-chip-panel {
+  background: #fbfcf8;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.audio-chip-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.audio-chip-heading span,
+.audio-chip-section > span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.audio-chip-section {
+  display: grid;
+  gap: 7px;
+}
+
+.audio-chip-section p {
+  color: #647068;
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.audio-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.audio-chip-pill {
+  align-items: stretch;
+  display: inline-flex;
+}
+
+.audio-chip-pill > button:first-child {
+  background: #e5f1df;
+  border-color: #b7d2af;
+  border-radius: 999px 0 0 999px;
+  color: var(--green);
+  display: inline-flex;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 9px 6px 11px;
+}
+
+.audio-chip-pill.muted > button:first-child {
+  background: #f3f0e8;
+  border-color: #ded5c4;
+  color: #5c6b61;
+}
+
+.audio-chip-pill small {
+  color: inherit;
+  font-size: 0.72rem;
+  opacity: 0.72;
+}
+
+.audio-chip-remove {
+  background: #fffdfa;
+  border-left: 0;
+  border-radius: 0 999px 999px 0;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+
 .audio-error {
   align-items: center;
   background: #fff7f4;

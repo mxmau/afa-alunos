@@ -31,6 +31,21 @@ function createOpenAiError(response, result, defaultMessage) {
   return error;
 }
 
+function cleanMimeType(mimeType) {
+  const type = typeof mimeType === "string" ? mimeType.split(";")[0].trim().toLowerCase() : "";
+  return type || "audio/webm";
+}
+
+function getAudioExtension(mimeType) {
+  const type = cleanMimeType(mimeType);
+  if (type.includes("mp4")) return "mp4";
+  if (type.includes("mpeg")) return "mpeg";
+  if (type.includes("ogg")) return "ogg";
+  if (type.includes("wav")) return "wav";
+  if (type.includes("webm")) return "webm";
+  return "webm";
+}
+
 function canUseFreeFallback(error) {
   const status = Number(error?.status || 0);
   const code = String(error?.code || "").toLocaleLowerCase("pt-BR");
@@ -131,8 +146,10 @@ async function transcribeAudio({ audioBase64, mimeType, fileName, apiKey }) {
   if (!buffer.length) return "";
 
   const formData = new FormData();
-  const blob = new Blob([buffer], { type: mimeType || "audio/webm" });
-  formData.append("file", blob, fileName || "afa-audio.webm");
+  const safeMimeType = cleanMimeType(mimeType);
+  const safeFileName = fileName || `afa-audio.${getAudioExtension(safeMimeType)}`;
+  const blob = new Blob([buffer], { type: safeMimeType });
+  formData.append("file", blob, safeFileName);
   formData.append("model", process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe");
   formData.append("language", "pt");
 

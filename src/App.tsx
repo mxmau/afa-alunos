@@ -262,6 +262,16 @@ type AfaAudioDraft = {
     notes: string;
   }>;
 };
+type AudioExpressionChip = {
+  id: string;
+  text: string;
+  normalized: string;
+  count: number;
+  studentIds: string[];
+  lastStudentName: string;
+  createdAt: string;
+  updatedAt: string;
+};
 type BrowserSpeechRecognitionResult = {
   isFinal: boolean;
   0: { transcript: string };
@@ -326,6 +336,24 @@ const afaAudioProfileLabels: Record<keyof StudentProfile, string> = {
   manter: "Precisa manter",
   apoioFamilia: "Apoio da familia",
 };
+
+const afaAudioMimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+const maxApiAudioUploadBytes = 4_200_000;
+
+function getAfaAudioExtension(mimeType: string) {
+  const baseType = mimeType.split(";")[0].toLocaleLowerCase("pt-BR");
+  if (baseType.includes("mp4")) return "mp4";
+  if (baseType.includes("mpeg")) return "mpeg";
+  if (baseType.includes("ogg")) return "ogg";
+  if (baseType.includes("wav")) return "wav";
+  if (baseType.includes("webm")) return "webm";
+  return "webm";
+}
+
+function getSupportedAfaAudioMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+  return afaAudioMimeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
+}
 
 function normalizeForMatch(value: string) {
   return value
@@ -457,6 +485,41 @@ function shouldUseAfaFreeFallback(error: unknown) {
     text.includes("403") ||
     text.includes("429")
   );
+}
+
+function normalizeAudioExpression(value: string) {
+  return normalizeForMatch(value)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getAudioExpressionId(value: string) {
+  return normalizeAudioExpression(value).replace(/\s+/g, "-").slice(0, 90);
+}
+
+function extractAudioExpressionCandidates(transcript: string) {
+  const normalizedInput = transcript.replace(/\s+/g, " ").trim();
+  if (!normalizedInput) return [];
+
+  const chunks = normalizedInput
+    .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?=mas|ainda|quando|precisa|necessita|tem|demonstra|participa)/i)
+    .map((chunk) => chunk.trim().replace(/[.!?,;:]+$/g, ""))
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  return chunks
+    .map((chunk) => chunk.replace(/^(o aluno|a aluna|aluno|aluna)\s+/i, "").trim())
+    .filter((chunk) => {
+      const normalized = normalizeAudioExpression(chunk);
+      const wordCount = normalized ? normalized.split(" ").length : 0;
+      if (wordCount < 3 || wordCount > 18) return false;
+      if (chunk.length < 18 || chunk.length > 145) return false;
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    })
+    .slice(0, 10);
 }
 
 export default function App() {
@@ -599,9 +662,18 @@ export default function App() {
   const [audioDraft, setAudioDraft] = useState<AfaAudioDraft | null>(null);
   const [audioError, setAudioError] = useState("");
   const [audioFreeSupported, setAudioFreeSupported] = useState(false);
+  const [audioExpressionChips, setAudioExpressionChips] = useState<AudioExpressionChip[]>(() => {
+    try {
+      const saved = localStorage.getItem("afa-audio-expression-chips:v1");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<BlobPart[]>([]);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const apiSpeechBackupRef = useRef(false);
   const speechBaseTranscriptRef = useRef("");
   const speechFinalTranscriptRef = useRef("");
   const speechCurrentTranscriptRef = useRef("");
@@ -687,6 +759,10 @@ export default function App() {
   useEffect(() => {
     setAudioFreeSupported(Boolean(getBrowserSpeechRecognition()));
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("afa-audio-expression-chips:v1", JSON.stringify(audioExpressionChips.slice(0, 80)));
+  }, [audioExpressionChips]);
 
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -2070,7 +2146,85 @@ export default function App() {
     setCommandOpen(false);
   }
 
+  const recurringAudioChips = audioExpressionChips
+    .filter((chip) => chip.count >= 2)
+    .sort((a, b) => b.count - a.count || b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 18);
+
+  const recentAudioChips = audioExpressionChips
+    .filter((chip) => chip.count < 2)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 8);
+
+  function registerAudioExpressionChips(transcript: string, student = selectedStudent) {
+    if (!student) return;
+    const candidates = extractAudioExpressionCandidates(transcript);
+    if (!candidates.length) return;
+
+    const now = new Date().toISOString();
+    setAudioExpressionChips((current) => {
+      const byId = new Map(current.map((chip) => [chip.id, chip]));
+
+      for (const text of candidates) {
+        const normalized = normalizeAudioExpression(text);
+        const id = getAudioExpressionId(text);
+        if (!id || !normalized) continue;
+
+        const existing = byId.get(id);
+        if (!existing) {
+          byId.set(id, {
+            id,
+            text,
+            normalized,
+            count: 1,
+            studentIds: [student.id],
+            lastStudentName: student.name,
+            createdAt: now,
+            updatedAt: now,
+          });
+          continue;
+        }
+
+        const studentIds = existing.studentIds.includes(student.id)
+          ? existing.studentIds
+          : [...existing.studentIds, student.id].slice(-80);
+
+        byId.set(id, {
+          ...existing,
+          text: existing.text.length <= text.length ? existing.text : text,
+          count: studentIds.length,
+          studentIds,
+          lastStudentName: student.name,
+          updatedAt: now,
+        });
+      }
+
+      return [...byId.values()]
+        .sort((a, b) => b.count - a.count || b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 80);
+    });
+  }
+
+  function applyAudioDraftFromTranscript(transcript: string, source: "api" | "local" | "gratis", draft?: AfaAudioDraft) {
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) return;
+    const nextDraft = draft || buildLocalAudioDraft(cleanTranscript);
+    setAudioTranscript(cleanTranscript);
+    setAudioDraft(nextDraft);
+    registerAudioExpressionChips(cleanTranscript);
+    if (source === "api") setAudioError("");
+  }
+
+  function insertAudioChipText(text: string) {
+    setAudioTranscript((current) => appendPhrase(current, text));
+  }
+
+  function removeAudioChip(id: string) {
+    setAudioExpressionChips((current) => current.filter((chip) => chip.id !== id));
+  }
+
   function closeAudioAfa() {
+    stopApiSpeechBackup();
     stopFreeSpeechRecognition(false);
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
@@ -2099,14 +2253,27 @@ export default function App() {
   async function requestAfaAudioDraft(options: { audioBlob?: Blob; transcript?: string }) {
     if (!selectedStudent) return;
 
+    if (options.audioBlob && options.audioBlob.size > maxApiAudioUploadBytes) {
+      const sizeError = new Error("O audio ficou grande demais para envio direto. Usei o texto capturado no aparelho quando disponivel.") as Error & {
+        fallback?: boolean;
+        code?: string;
+        status?: number;
+      };
+      sizeError.fallback = true;
+      sizeError.code = "audio_too_large";
+      sizeError.status = 413;
+      throw sizeError;
+    }
+
     const audioBase64 = options.audioBlob ? await blobToBase64(options.audioBlob) : undefined;
+    const mimeType = options.audioBlob?.type || "audio/webm";
     const response = await fetch("/api/afa-audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         audioBase64,
-        mimeType: options.audioBlob?.type || "audio/webm",
-        fileName: `afa-${selectedStudent.id}.webm`,
+        mimeType,
+        fileName: `afa-${selectedStudent.id}.${getAfaAudioExtension(mimeType)}`,
         transcript: options.transcript,
         student: {
           name: selectedStudent.name,
@@ -2130,9 +2297,7 @@ export default function App() {
       throw apiError;
     }
 
-    setAudioTranscript(result.transcript || options.transcript || "");
-    setAudioDraft(cleanAudioDraft(result.draft));
-    setAudioError("");
+    applyAudioDraftFromTranscript(result.transcript || options.transcript || "", "api", cleanAudioDraft(result.draft));
   }
 
   async function processAfaAudioBlob(blob: Blob) {
@@ -2143,20 +2308,20 @@ export default function App() {
         if (!audioTranscript.trim()) {
           throw new Error("No modo local, cole a transcricao antes de organizar a ficha.");
         }
-        setAudioDraft(buildLocalAudioDraft(audioTranscript));
+        applyAudioDraftFromTranscript(audioTranscript, "local");
         return;
       }
       if (audioMode === "gratis") {
         const transcript = audioTranscript.trim();
         if (!transcript) throw new Error("Use o ditado gratis do navegador ou cole a transcricao.");
-        setAudioDraft(buildLocalAudioDraft(transcript));
+        applyAudioDraftFromTranscript(transcript, "gratis");
         return;
       }
       await requestAfaAudioDraft({ audioBlob: blob });
     } catch (error) {
-      const fallbackText = audioTranscript.trim();
+      const fallbackText = (audioTranscript.trim() || speechCurrentTranscriptRef.current.trim()).trim();
       if (fallbackText) {
-        setAudioDraft(buildLocalAudioDraft(fallbackText));
+        applyAudioDraftFromTranscript(fallbackText, "local");
         if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
         setAudioError(
           error instanceof Error
@@ -2172,7 +2337,11 @@ export default function App() {
               : "A API paga falhou ou ficou sem credito. Cole a transcricao para usar as regras locais.",
           );
         } else {
-          setAudioError(error instanceof Error ? error.message : "Nao consegui processar o audio.");
+          setAudioError(
+            error instanceof Error
+              ? `${error.message} Se estiver no celular, tente o modo Gratis para transcrever no proprio aparelho.`
+              : "Nao consegui processar o audio. Se estiver no celular, tente o modo Gratis.",
+          );
         }
       }
     } finally {
@@ -2200,7 +2369,9 @@ export default function App() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const options = MediaRecorder.isTypeSupported("audio/webm") ? { mimeType: "audio/webm" } : undefined;
+      const mimeType = getSupportedAfaAudioMimeType();
+      const options: MediaRecorderOptions = { audioBitsPerSecond: 32000 };
+      if (mimeType) options.mimeType = mimeType;
       const recorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -2213,6 +2384,7 @@ export default function App() {
       };
       recorder.start();
       setAudioRecording(true);
+      startApiSpeechBackup();
     } catch (error) {
       setAudioError(error instanceof Error ? error.message : "Nao consegui iniciar a gravacao.");
     }
@@ -2223,10 +2395,82 @@ export default function App() {
       stopFreeSpeechRecognition(true);
       return;
     }
+    stopApiSpeechBackup();
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     recorder.stop();
     setAudioRecording(false);
+  }
+
+  function startApiSpeechBackup() {
+    const Recognition = getBrowserSpeechRecognition();
+    if (!Recognition || speechRecognitionRef.current) return;
+
+    setAudioFreeSupported(true);
+    const recognition = new Recognition();
+    recognition.lang = "pt-BR";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    apiSpeechBackupRef.current = true;
+    speechBaseTranscriptRef.current = audioTranscript.trim();
+    speechFinalTranscriptRef.current = "";
+    speechCurrentTranscriptRef.current = speechBaseTranscriptRef.current;
+
+    recognition.onresult = (event) => {
+      let finalText = speechFinalTranscriptRef.current;
+      let interimText = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript?.trim() || "";
+        if (!transcript) continue;
+        if (result.isFinal) {
+          finalText = `${finalText} ${transcript}`.trim();
+        } else {
+          interimText = `${interimText} ${transcript}`.trim();
+        }
+      }
+
+      speechFinalTranscriptRef.current = finalText;
+      const current = [speechBaseTranscriptRef.current, finalText, interimText].filter(Boolean).join(" ").trim();
+      speechCurrentTranscriptRef.current = current;
+      setAudioTranscript(current);
+    };
+
+    recognition.onerror = () => {
+      apiSpeechBackupRef.current = false;
+      speechRecognitionRef.current = null;
+    };
+
+    recognition.onend = () => {
+      apiSpeechBackupRef.current = false;
+      speechRecognitionRef.current = null;
+    };
+
+    speechRecognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      apiSpeechBackupRef.current = false;
+      speechRecognitionRef.current = null;
+    }
+  }
+
+  function stopApiSpeechBackup() {
+    if (!apiSpeechBackupRef.current) return;
+    const recognition = speechRecognitionRef.current;
+    apiSpeechBackupRef.current = false;
+    if (!recognition) return;
+    recognition.onend = null;
+    recognition.onerror = null;
+    try {
+      recognition.stop();
+    } catch {
+      recognition.abort?.();
+    }
+    speechRecognitionRef.current = null;
   }
 
   function startFreeSpeechRecognition() {
@@ -2284,7 +2528,7 @@ export default function App() {
       setAudioRecording(false);
       speechRecognitionRef.current = null;
       const transcript = speechCurrentTranscriptRef.current.trim();
-      if (transcript) setAudioDraft(buildLocalAudioDraft(transcript));
+      if (transcript) applyAudioDraftFromTranscript(transcript, "gratis");
     };
 
     speechRecognitionRef.current = recognition;
@@ -2308,8 +2552,7 @@ export default function App() {
 
     const transcript = speechCurrentTranscriptRef.current.trim() || audioTranscript.trim();
     if (organizeDraft && transcript) {
-      setAudioTranscript(transcript);
-      setAudioDraft(buildLocalAudioDraft(transcript));
+      applyAudioDraftFromTranscript(transcript, "gratis");
     }
   }
 
@@ -2326,10 +2569,10 @@ export default function App() {
       if (audioMode === "api") {
         await requestAfaAudioDraft({ transcript });
       } else {
-        setAudioDraft(buildLocalAudioDraft(transcript));
+        applyAudioDraftFromTranscript(transcript, audioMode);
       }
     } catch (error) {
-      setAudioDraft(buildLocalAudioDraft(transcript));
+      applyAudioDraftFromTranscript(transcript, "local");
       if (shouldUseAfaFreeFallback(error)) setAudioMode("local");
       setAudioError(
         error instanceof Error
@@ -5521,6 +5764,51 @@ export default function App() {
                 placeholder="Ex.: O aluno tem participado mais, mas ainda se dispersa em explicacoes longas..."
               />
             </label>
+
+            <div className="audio-chip-panel">
+              <div className="audio-chip-heading">
+                <strong>Chips aprendidos</strong>
+                <span>{audioExpressionChips.length} expressao(oes)</span>
+              </div>
+              <div className="audio-chip-section">
+                <span>Recorrentes</span>
+                {recurringAudioChips.length > 0 ? (
+                  <div className="audio-chip-list">
+                    {recurringAudioChips.map((chip) => (
+                      <div className="audio-chip-pill" key={chip.id}>
+                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title="Inserir na transcricao">
+                          {chip.text}
+                          <small>{chip.count} alunos</small>
+                        </button>
+                        <button type="button" className="audio-chip-remove" onClick={() => removeAudioChip(chip.id)} title="Remover chip">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>As expressoes repetidas em alunos diferentes aparecem aqui.</p>
+                )}
+              </div>
+              {recentAudioChips.length > 0 && (
+                <div className="audio-chip-section">
+                  <span>Em observacao</span>
+                  <div className="audio-chip-list">
+                    {recentAudioChips.map((chip) => (
+                      <div className="audio-chip-pill muted" key={chip.id}>
+                        <button type="button" onClick={() => insertAudioChipText(chip.text)} title="Inserir na transcricao">
+                          {chip.text}
+                          <small>{chip.count} aluno</small>
+                        </button>
+                        <button type="button" className="audio-chip-remove" onClick={() => removeAudioChip(chip.id)} title="Remover chip">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {audioError && (
               <div className="audio-error">

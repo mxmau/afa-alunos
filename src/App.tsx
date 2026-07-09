@@ -2351,25 +2351,61 @@ export default function App() {
       throw sizeError;
     }
 
-    const audioBase64 = options.audioBlob ? await blobToBase64(options.audioBlob) : undefined;
-    const mimeType = options.audioBlob?.type || "audio/webm";
+    let currentTranscript = options.transcript || "";
     const requestSummary = {
       hasAudio: Boolean(options.audioBlob),
       audioSize: options.audioBlob?.size || 0,
-      mimeType,
-      transcriptLength: options.transcript?.trim().length || 0,
+      mimeType: options.audioBlob?.type || "audio/webm",
+      transcriptLength: currentTranscript.trim().length || 0,
       studentId: selectedStudent.id,
       studentClass: selectedStudent.className,
       studentCampus: selectedStudent.campus,
     };
-    const response = await fetch("/api/afa-audio", {
+
+    if (options.audioBlob && !currentTranscript.trim()) {
+      const audioBase64 = await blobToBase64(options.audioBlob);
+      const mimeType = options.audioBlob.type || "audio/webm";
+      
+      const transcribeResponse = await fetch("/api/afa-transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType,
+          fileName: `afa-${selectedStudent.id}.${getAfaAudioExtension(mimeType)}`,
+        }),
+      });
+
+      const transcribeText = await transcribeResponse.text();
+      let transcribeResult: Record<string, unknown> = {};
+      try {
+        transcribeResult = transcribeText ? JSON.parse(transcribeText) : {};
+      } catch {
+        transcribeResult = { raw: transcribeText.slice(0, 1600) };
+      }
+
+      if (!transcribeResponse.ok) {
+        const errorMessage = typeof transcribeResult.error === "string" ? transcribeResult.error : "Nao consegui transcrever o audio.";
+        const apiError = new Error(errorMessage) as AfaAudioApiError;
+        apiError.fallback = Boolean(transcribeResult.fallback);
+        apiError.code = typeof transcribeResult.code === "string" ? transcribeResult.code : "";
+        apiError.status = Number(transcribeResult.status || transcribeResponse.status);
+        apiError.statusText = transcribeResponse.statusText;
+        apiError.endpoint = "/api/afa-transcribe";
+        apiError.request = requestSummary;
+        apiError.responseBody = transcribeResult;
+        throw apiError;
+      }
+      
+      currentTranscript = typeof transcribeResult.transcript === "string" ? transcribeResult.transcript : "";
+      requestSummary.transcriptLength = currentTranscript.length;
+    }
+
+    const structureResponse = await fetch("/api/afa-structure", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        audioBase64,
-        mimeType,
-        fileName: `afa-${selectedStudent.id}.${getAfaAudioExtension(mimeType)}`,
-        transcript: options.transcript,
+        transcript: currentTranscript,
         student: {
           name: selectedStudent.name,
           className: selectedStudent.className,
@@ -2379,31 +2415,31 @@ export default function App() {
       }),
     });
 
-    const responseText = await response.text();
-    let result: Record<string, unknown> = {};
+    const structureText = await structureResponse.text();
+    let structureResult: Record<string, unknown> = {};
     try {
-      result = responseText ? JSON.parse(responseText) : {};
+      structureResult = structureText ? JSON.parse(structureText) : {};
     } catch {
-      result = { raw: responseText.slice(0, 1600) };
+      structureResult = { raw: structureText.slice(0, 1600) };
     }
 
-    if (!response.ok) {
-      const errorMessage = typeof result.error === "string" ? result.error : "Nao consegui processar o audio pela API.";
+    if (!structureResponse.ok) {
+      const errorMessage = typeof structureResult.error === "string" ? structureResult.error : "Nao consegui organizar a ficha.";
       const apiError = new Error(errorMessage) as AfaAudioApiError;
-      apiError.fallback = Boolean(result.fallback);
-      apiError.code = typeof result.code === "string" ? result.code : "";
-      apiError.status = Number(result.status || response.status);
-      apiError.statusText = response.statusText;
-      apiError.endpoint = "/api/afa-audio";
+      apiError.fallback = Boolean(structureResult.fallback);
+      apiError.code = typeof structureResult.code === "string" ? structureResult.code : "";
+      apiError.status = Number(structureResult.status || structureResponse.status);
+      apiError.statusText = structureResponse.statusText;
+      apiError.endpoint = "/api/afa-structure";
       apiError.request = requestSummary;
-      apiError.responseBody = result;
+      apiError.responseBody = structureResult;
       throw apiError;
     }
 
     applyAudioDraftFromTranscript(
-      typeof result.transcript === "string" ? result.transcript : options.transcript || "",
+      currentTranscript,
       "api",
-      cleanAudioDraft(result.draft),
+      cleanAudioDraft(structureResult.draft),
     );
   }
 

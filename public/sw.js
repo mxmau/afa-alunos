@@ -1,4 +1,4 @@
-const CACHE_NAME = "afa-alunos-cache-v1";
+const CACHE_NAME = "afa-alunos-cache-v2";
 const STATIC_ASSETS = [
   "/",
   "/index.html",

@@ -180,6 +180,32 @@ export async function handler(event) {
       allowedAlertLevels: [...ALERT_LEVELS],
       allowedIncidentTypes: [...INCIDENT_TYPES],
     };
+    const model = process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini";
+    const usesCompletionTokens = /^(gpt-5|o\d|o-)/i.test(model);
+    const requestBody = {
+      model,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Organize observacoes escolares em portugues brasileiro. Retorne somente JSON valido. Nao invente fatos. Use frases curtas para conversa com familia. Extraia chips de ate 3 palavras.",
+        },
+        {
+          role: "user",
+          content:
+            "Monte um rascunho AFA com este formato exato: {\"profile\":{\"resumoRapido\":\"\",\"personalidade\":\"\",\"positivos\":\"\",\"atencao\":\"\",\"social\":\"\",\"pedagogico\":\"\",\"melhorar\":\"\",\"manter\":\"\",\"apoioFamilia\":\"\"},\"alertLevel\":\"tranquilo|observacao|atencao|prioridade\",\"tags\":[\"\"],\"chips\":[\"\"],\"incidents\":[{\"type\":\"positivo|observacao|familia|pedagogico|social\",\"title\":\"\",\"notes\":\"\"}]}. Dados: " +
+            JSON.stringify(prompt),
+        },
+      ],
+    };
+
+    if (usesCompletionTokens) {
+      requestBody.max_completion_tokens = 700;
+    } else {
+      requestBody.temperature = 0.2;
+      requestBody.max_tokens = 700;
+    }
 
     const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -187,25 +213,7 @@ export async function handler(event) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
-        temperature: 0.2,
-        max_tokens: 700,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Organize observacoes escolares em portugues brasileiro. Retorne somente JSON valido. Nao invente fatos. Use frases curtas para conversa com familia. Extraia chips de ate 3 palavras.",
-          },
-          {
-            role: "user",
-            content:
-              "Monte um rascunho AFA com este formato exato: {\"profile\":{\"resumoRapido\":\"\",\"personalidade\":\"\",\"positivos\":\"\",\"atencao\":\"\",\"social\":\"\",\"pedagogico\":\"\",\"melhorar\":\"\",\"manter\":\"\",\"apoioFamilia\":\"\"},\"alertLevel\":\"tranquilo|observacao|atencao|prioridade\",\"tags\":[\"\"],\"chips\":[\"\"],\"incidents\":[{\"type\":\"positivo|observacao|familia|pedagogico|social\",\"title\":\"\",\"notes\":\"\"}]}. Dados: " +
-              JSON.stringify(prompt),
-          },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     }, OPENAI_TIMEOUT_MS);
 
     const result = await response.json().catch(() => ({}));
